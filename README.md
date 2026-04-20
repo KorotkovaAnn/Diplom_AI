@@ -89,6 +89,77 @@ feature[step] = feature[step-1] + annual_slope × multiplier
 
 По официальным документам (полная Тюменская область) базовый сценарий на 2027 год — 530 800 млн руб. Для нашего показателя (без ХМАО и ЯНАО) ожидаемый уровень на 2027 год — **порядка 490 000 млн руб.** по базовому сценарию.
 
+## Базы данных
+
+Готовые пайплайны сохраняют данные и результаты в два SQLite-файла в папке `data-base/`.
+
+### `data-base/indicators.db` — исходные данные и показатели
+
+```
+Sphere
+├── id_sphere   INTEGER PK AUTOINCREMENT
+└── name        TEXT UNIQUE          -- название сферы (экономика, население и т.д.)
+
+Indicator
+├── id_indicator  INTEGER PK AUTOINCREMENT
+├── id_sphere     INTEGER FK → Sphere
+├── name          TEXT               -- название показателя
+└── unit          TEXT               -- единица измерения
+
+Dataset
+├── id_indicator  INTEGER FK → Indicator  ┐ PK составной
+├── year          INTEGER                 ┘
+└── value         REAL                    -- значение показателя за год
+```
+
+### `data-base/models.db` — модели, метрики и прогнозы
+
+```
+ForecastRun
+├── id_run             INTEGER PK AUTOINCREMENT
+├── forecast_horizon   INTEGER     -- горизонт прогноза (лет)
+├── train_start_year   INTEGER
+├── train_end_year     INTEGER
+├── status             TEXT        -- pending / done / error
+└── error_message      TEXT
+
+RunIndicatorRole
+├── id_run         INTEGER FK → ForecastRun  ┐ PK составной
+├── id_indicator   INTEGER                   ┘  (ссылка на indicators.db)
+└── role           TEXT                      -- target / feature
+
+Model
+├── id_model     INTEGER PK AUTOINCREMENT
+├── id_run       INTEGER FK → ForecastRun
+├── model_name   TEXT        -- произвольное имя модели
+├── model_type   TEXT        -- ml / lstm
+├── algorithm    TEXT        -- конкретный алгоритм (Ridge, LSTM и т.д.)
+├── status       TEXT        -- trained / failed
+└── model_path   TEXT        -- путь к сериализованному файлу модели
+
+ModelMetric
+├── id_metric   INTEGER PK AUTOINCREMENT
+├── id_model    INTEGER FK → Model UNIQUE
+├── mae         REAL
+├── rmse        REAL
+└── mape        REAL
+
+ForecastResult
+├── id_result        INTEGER PK AUTOINCREMENT
+├── id_model         INTEGER FK → Model
+├── year             INTEGER
+├── scenario_name    TEXT    -- оценка / базовый / консервативный
+└── forecast_value   REAL
+
+ShapContribution
+├── id_contribution      INTEGER PK AUTOINCREMENT
+├── id_result            INTEGER FK → ForecastResult
+├── id_indicator         INTEGER     -- ссылка на indicators.db
+├── contribution_value   REAL
+├── direction            TEXT        -- positive / negative
+└── rank_position        INTEGER     -- порядковый номер по важности
+```
+
 ## Как запустить
 
 1. Создать виртуальное окружение Python 3.11+
