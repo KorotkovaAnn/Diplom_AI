@@ -15,13 +15,13 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import { useRootStore, type TimeSeriesPoint } from '../stores/rootStore.tsx'
+import { useRootStore, type ApiModel, type TimeSeriesPoint } from '../stores/rootStore.tsx'
 
 export const DashboardsPage = observer(function DashboardsPage() {
   const { dashboards, indicators } = useRootStore()
 
   useEffect(() => {
-    dashboards.fetchDashboard()
+    dashboards.initializeDashboard()
     indicators.fetchIndicators()
   }, [dashboards, indicators])
 
@@ -30,6 +30,10 @@ export const DashboardsPage = observer(function DashboardsPage() {
   const kpis = dashboards.kpis
 
   const forecastCards = series.filter((p) => p.forecast != null)
+  const shapChartData = shap.slice(0, 5).map((factor) => ({
+    ...factor,
+    shortName: shortenFactorName(factor.name),
+  }))
   const positiveFactors = shap.filter((f) => f.contribution > 0).slice(0, 3)
   const negativeFactors = shap.filter((f) => f.contribution < 0).slice(0, 3)
 
@@ -37,7 +41,7 @@ export const DashboardsPage = observer(function DashboardsPage() {
     <div>
       <h1 className="page-title">Аналитические дашборды</h1>
       <p className="page-subtitle">
-        Выберите показатель для анализа — прогноз, доверительные интервалы и SHAP-интерпретация
+        Выберите показатель для анализа — прогноз, сценарный коридор и SHAP-интерпретация
         обновятся автоматически.
       </p>
 
@@ -101,16 +105,37 @@ export const DashboardsPage = observer(function DashboardsPage() {
           </div>
 
           <div className="dashboard-filter-group">
+            <div className="dashboard-filter-label">Модель прогноза</div>
+            <select
+              className="dashboard-select"
+              value={dashboards.selectedModelId ?? ''}
+              onChange={(e) => dashboards.setSelectedModel(e.target.value)}
+            >
+              {dashboards.isModelsLoading ? (
+                <option value="" disabled>Загрузка моделей…</option>
+              ) : dashboards.modelOptions.length > 0 ? (
+                dashboards.modelOptions.map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {modelOptionLabel(model)}
+                  </option>
+                ))
+              ) : (
+                <option value="" disabled>Нет обученных моделей</option>
+              )}
+            </select>
+          </div>
+
+          <div className="dashboard-filter-group">
             <div className="dashboard-filter-label">Сценарий прогноза</div>
             <div className="dashboard-segmented">
-              {(['base', 'optimistic', 'pessimistic'] as const).map((sc) => (
+              {(['base', 'conservative'] as const).map((sc) => (
                 <button
                   key={sc}
                   type="button"
                   className={segmentClass(dashboards.scenarioType === sc)}
                   onClick={() => dashboards.setScenarioType(sc)}
                 >
-                  {sc === 'base' ? 'Базовый' : sc === 'optimistic' ? 'Оптимистичный' : 'Пессимистичный'}
+                  {sc === 'base' ? 'Базовый' : 'Консервативный'}
                 </button>
               ))}
             </div>
@@ -133,13 +158,16 @@ export const DashboardsPage = observer(function DashboardsPage() {
             <aside className="dashboard-forecast-cards glass-panel">
               <h2 className="home-section-title">Прогноз по годам</h2>
               <p className="home-section-subtitle">
-                Прогноз на горизонт вперёд с динамикой относительно последнего фактического значения.
+                Прогноз на горизонт вперёд с годовой динамикой относительно предыдущего значения.
               </p>
               <div className="forecast-cards-grid">
-                {forecastCards.map((p) => {
-                  const base = kpis.currentValue
+                {forecastCards.map((p, index) => {
+                  const previousValue =
+                    index === 0 ? kpis.currentValue : forecastCards[index - 1]?.forecast
                   const change =
-                    base != null && p.forecast != null ? ((p.forecast - base) / base) * 100 : null
+                    previousValue != null && p.forecast != null
+                      ? ((p.forecast - previousValue) / previousValue) * 100
+                      : null
 
                   const changeClass =
                     change == null ? 'neutral' : change > 0.5 ? 'positive' : change < -0.5 ? 'negative' : 'neutral'
@@ -210,11 +238,11 @@ export const DashboardsPage = observer(function DashboardsPage() {
                     <div className="dashboard-kpi-label">Точность модели (MAPE)</div>
                     <div className="dashboard-kpi-value dashboard-kpi-value-small positive">
                       {dashboards.modelInfo.mape != null
-                        ? `${dashboards.modelInfo.mape.toFixed(1)}%`
+                        ? `${(dashboards.modelInfo.mape * 100).toFixed(1)}%`
                         : '—'}
                     </div>
                     <div className="dashboard-kpi-caption">
-                      {dashboards.modelInfo.name}
+                      {dashboards.modelInfo ? modelCardCaption(dashboards.modelInfo) : '—'}
                     </div>
                   </div>
                 )}
@@ -225,7 +253,7 @@ export const DashboardsPage = observer(function DashboardsPage() {
             <section className="dashboard-chart-panel glass-panel">
               <h2 className="home-section-title">Динамика показателя и прогноз</h2>
               <p className="home-section-subtitle">
-                Синяя линия — фактические значения, фиолетовая — прогноз с доверительным интервалом.
+                Синяя линия — фактические значения, фиолетовая — выбранный прогноз со сценарным коридором.
               </p>
               <div className="dashboard-main-chart">
                 <ResponsiveContainer width="100%" height="100%">
@@ -326,7 +354,7 @@ export const DashboardsPage = observer(function DashboardsPage() {
                 </span>
                 <span className="legend-item">
                   <span className="legend-band" style={{ background: 'rgba(167,139,250,0.25)' }} />
-                  Доверительный интервал
+                  Сценарный коридор
                 </span>
               </div>
             </section>
@@ -344,9 +372,10 @@ export const DashboardsPage = observer(function DashboardsPage() {
                 <div className="shap-chart-wrapper">
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart
-                      data={shap}
+                      data={shapChartData}
                       layout="vertical"
-                      margin={{ left: 16, right: 40, top: 8, bottom: 8 }}
+                      margin={{ left: 20, right: 52, top: 10, bottom: 12 }}
+                      barCategoryGap={18}
                     >
                       <defs>
                         <linearGradient id="shapPositive" x1="0" x2="1" y1="0" y2="0">
@@ -365,15 +394,15 @@ export const DashboardsPage = observer(function DashboardsPage() {
                       />
                       <YAxis
                         type="category"
-                        dataKey="name"
-                        tick={{ fontSize: 11 }}
-                        width={200}
+                        dataKey="shortName"
+                        tick={{ fontSize: 11, width: 230 }}
+                        width={230}
+                        interval={0}
                       />
                       <Tooltip
-                        formatter={(value: number | undefined) => [
-                          value != null ? `${(value * 100).toFixed(1)}%` : '—',
-                          'Вклад в прогноз',
-                        ]}
+                        content={<ShapTooltip />}
+                        allowEscapeViewBox={{ x: true, y: true }}
+                        wrapperStyle={{ zIndex: 50, outline: 'none' }}
                       />
                       <Bar
                         dataKey="contribution"
@@ -386,7 +415,7 @@ export const DashboardsPage = observer(function DashboardsPage() {
                           fontSize: 11,
                         }}
                       >
-                        {shap.map((entry) => (
+                        {shapChartData.map((entry) => (
                           <Cell
                             key={entry.id}
                             fill={entry.contribution >= 0 ? 'url(#shapPositive)' : 'url(#shapNegative)'}
@@ -465,8 +494,8 @@ export const DashboardsPage = observer(function DashboardsPage() {
               <div className="advanced-block">
                 <div className="advanced-title">Сравнение сценариев</div>
                 <p className="advanced-text">
-                  Таблица с базовым, оптимистичным и пессимистичным сценариями прогноза с
-                  визуальным сравнением всех трёх линий.
+                  Таблица с оценкой первого года, базовым и консервативным сценариями прогноза
+                  с визуальным сравнением траекторий.
                 </p>
               </div>
               <div className="advanced-block">
@@ -487,7 +516,7 @@ export const DashboardsPage = observer(function DashboardsPage() {
                 <div className="advanced-title">Метрики качества моделей</div>
                 <p className="advanced-text">
                   {dashboards.modelInfo
-                    ? `Лучшая модель: ${dashboards.modelInfo.name} — MAE: ${dashboards.modelInfo.mae?.toLocaleString('ru-RU', { maximumFractionDigits: 0 })}, RMSE: ${dashboards.modelInfo.rmse?.toLocaleString('ru-RU', { maximumFractionDigits: 0 })}, MAPE: ${dashboards.modelInfo.mape?.toFixed(1)}%.`
+                    ? `Лучшая модель: ${dashboards.modelInfo.name} — MAE: ${dashboards.modelInfo.mae?.toLocaleString('ru-RU', { maximumFractionDigits: 0 })}, RMSE: ${dashboards.modelInfo.rmse?.toLocaleString('ru-RU', { maximumFractionDigits: 0 })}, MAPE: ${dashboards.modelInfo.mape != null ? (dashboards.modelInfo.mape * 100).toFixed(1) : '—'}%.`
                     : 'Набор ключевых метрик (RMSE, MAE, MAPE) показывает точность прогнозов и устойчивость моделей на исторических данных.'}
                 </p>
               </div>
@@ -505,6 +534,65 @@ export const DashboardsPage = observer(function DashboardsPage() {
 
 function segmentClass(active: boolean): string {
   return active ? 'dashboard-segment dashboard-segment-active' : 'dashboard-segment'
+}
+
+function modelTypeLabel(type: string): string {
+  if (type === 'machine_learning') return 'ML'
+  if (type === 'neural_network') return 'LSTM'
+  return type
+}
+
+function modelOptionLabel(model: ApiModel): string {
+  const mape = model.mape != null ? ` · MAPE ${(model.mape * 100).toFixed(1)}%` : ''
+  return `${modelTypeLabel(model.type)} · ${model.name}${mape}`
+}
+
+function modelCardCaption(model: ApiModel): string {
+  return `${modelTypeLabel(model.type)} · ${model.name}`
+}
+
+function shortenFactorName(name: string): string {
+  const replacements: Record<string, string> = {
+    'Среднедушевые денежные доходы населения в год': 'Среднедушевые доходы',
+    'Среднемесячная номинальная начисленная заработная плата работников организаций': 'Среднемесячная зарплата',
+    'Потребительские расходы в среднем на душу населения': 'Потребительские расходы',
+    'Ввод в действие основных фондов': 'Ввод основных фондов',
+    'Валовой региональный продукт на душу населения': 'ВРП на душу населения',
+    'Объем инвестиций в основной капитал': 'Инвестиции в основной капитал',
+    'Стоимость основных фондов по Тюм обл, на конец года, по полной учетной стоимости': 'Стоимость основных фондов',
+    'Задолженность по кредитам в рублях, предоставленным кредитными организациями физическим лицам': 'Задолженность по кредитам',
+  }
+
+  if (replacements[name]) return replacements[name]
+  return name.length > 32 ? `${name.slice(0, 31)}…` : name
+}
+
+function ShapTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean
+  payload?: Array<{
+    value?: number
+    payload?: {
+      name?: string
+      contribution?: number
+    }
+  }>
+}) {
+  if (!active || !payload?.length) return null
+
+  const item = payload[0]
+  const value = typeof item.value === 'number' ? item.value : item.payload?.contribution
+
+  return (
+    <div className="shap-tooltip">
+      <div className="shap-tooltip-title">{item.payload?.name ?? 'Фактор'}</div>
+      <div className="shap-tooltip-value">
+        Вклад в прогноз: {typeof value === 'number' ? `${(value * 100).toFixed(1)}%` : '—'}
+      </div>
+    </div>
+  )
 }
 
 function applyTimeRange(
@@ -545,4 +633,3 @@ function groupByCategory(indicators: { id: string; name: string; category: strin
 
   return groups
 }
-

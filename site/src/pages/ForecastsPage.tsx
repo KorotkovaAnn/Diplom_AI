@@ -51,10 +51,7 @@ export const ForecastsPage = observer(function ForecastsPage() {
                 Базовый
               </button>
               <button type="button" className="dashboard-segment">
-                Оптимистичный
-              </button>
-              <button type="button" className="dashboard-segment">
-                Пессимистичный
+                Консервативный
               </button>
             </div>
           </div>
@@ -125,4 +122,3 @@ function ForecastCell({ base, value }: { base: number; value: number }) {
     </td>
   )
 }
-

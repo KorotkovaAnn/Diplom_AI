@@ -132,7 +132,7 @@ function HeroSection() {
         <Box className="hero-benefits">
           <span className="hero-benefit-item">48 социально-экономических показателей</span>
           <span className="hero-benefit-item">
-            Прогноз на 4 года с доверительными интервалами
+            Прогноз на 4 года со сценарным коридором
           </span>
           <span className="hero-benefit-item">SHAP-анализ факторов влияния</span>
           <span className="hero-benefit-item">Экспорт в PDF и Excel для отчётов</span>
@@ -146,7 +146,7 @@ function HeroSection() {
           <Box className="hero-overlay-card">
             <Box className="hero-overlay-title">Инвестиции в основной капитал</Box>
             <Box className="hero-overlay-subtitle">
-              Прогноз +4 года с доверительным интервалом и ключевыми драйверами роста.
+              Прогноз +4 года со сценарным коридором и ключевыми драйверами роста.
             </Box>
 
             <Box className="hero-metric-row">
@@ -175,8 +175,8 @@ function HeroSection() {
           <Box className="hero-overlay-card">
             <Box className="hero-overlay-title">Инвестиции в основной капитал</Box>
             <Box className="hero-overlay-subtitle">
-              Сценарный анализ: базовый, оптимистичный и пессимистичный варианты динамики
-              инвестиций.
+              Сценарный анализ: оценка первого года, базовый и консервативный варианты
+              динамики инвестиций.
             </Box>
 
             <Box className="hero-metric-row">
@@ -185,14 +185,14 @@ function HeroSection() {
                 <Box className="hero-metric-value">+18% к 2028 году</Box>
               </Box>
               <Box sx={{ textAlign: 'right' }}>
-                <Box className="hero-metric-label">Оптимистичный сценарий</Box>
-                <Box className="hero-metric-change">+25%</Box>
+                <Box className="hero-metric-label">Оценка первого года</Box>
+                <Box className="hero-metric-change">2024</Box>
               </Box>
             </Box>
 
             <Box className="hero-metric-row">
               <Box>
-                <Box className="hero-metric-label">Пессимистичный сценарий</Box>
+                <Box className="hero-metric-label">Консервативный сценарий</Box>
                 <Box className="hero-metric-value">+9%</Box>
               </Box>
               <Box sx={{ textAlign: 'right' }}>
@@ -301,7 +301,7 @@ function CapabilitiesAndMetrics() {
           <div className="metric-item">
             <div className="metric-label">Горизонт прогноза</div>
             <div className="metric-value">+4 года</div>
-            <div className="metric-caption">базовый, оптимистичный и пессимистичный</div>
+            <div className="metric-caption">оценка, базовый и консервативный сценарии</div>
           </div>
           <div className="metric-item">
             <div className="metric-label">Частота обновления</div>
@@ -350,7 +350,7 @@ function ProcessAndQuickActions() {
             number={4}
             color="linear-gradient(145deg, #f59e0b, #fbbf24)"
             title="Интерпретация"
-            text="SHAP-анализ, доверительные интервалы и сценарные сравнения для прозрачности решений."
+            text="SHAP-анализ, сценарный коридор и сравнение вариантов для прозрачности решений."
           />
           <TimelineStep
             number={5}
@@ -575,4 +575,3 @@ function UpdatesAndFaq() {
     </section>
   )
 }
-

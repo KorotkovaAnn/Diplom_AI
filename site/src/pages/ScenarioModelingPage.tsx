@@ -186,7 +186,7 @@ export const ScenarioModelingPage = observer(function ScenarioModelingPage() {
                   .filter((p) => p.forecast != null)
                   .map((p) => {
                     const base = p.forecast ?? 0
-                    const scen = (p as any).scenario ?? base
+                    const scen = p.scenario ?? base
                     const diff = base ? ((scen - base) / base) * 100 : 0
                     return (
                       <tr key={p.year}>
@@ -207,4 +207,3 @@ export const ScenarioModelingPage = observer(function ScenarioModelingPage() {
     </div>
   )
 })
-

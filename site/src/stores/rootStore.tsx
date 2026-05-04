@@ -1,8 +1,9 @@
+/* eslint-disable react-refresh/only-export-components */
 import { createContext, type ReactNode, useContext } from 'react'
 import { makeAutoObservable, runInAction } from 'mobx'
 
 export type LanguageCode = 'ru' | 'en'
-export type ScenarioType = 'base' | 'optimistic' | 'pessimistic'
+export type ScenarioType = 'base' | 'conservative'
 export type IndicatorCategory =
   | 'economy'
   | 'investment'
@@ -68,19 +69,24 @@ interface ApiShapItem {
   rank: number
 }
 
+export interface ApiModel {
+  id: number
+  run_id: number
+  name: string
+  type: string
+  algorithm: string
+  status: string
+  mae: number | null
+  rmse: number | null
+  mape: number | null
+}
+
 interface ApiDashboard {
   target_indicator: ApiIndicator | null
   history: ApiHistoryPoint[]
   forecasts: Record<string, ApiHistoryPoint[]>
   shap: Record<string, ApiShapItem[]>
-  model: {
-    id: number
-    name: string
-    algorithm: string
-    mae: number | null
-    rmse: number | null
-    mape: number | null
-  } | null
+  model: ApiModel | null
 }
 
 // ---------------------------------------------------------------------------
@@ -102,8 +108,7 @@ const SPHERE_MAP: Record<string, IndicatorCategory> = {
 
 const SCENARIO_RU: Record<ScenarioType, string> = {
   base: 'Базовый',
-  optimistic: 'Оптимистичный',
-  pessimistic: 'Пессимистичный',
+  conservative: 'Консервативный',
 }
 
 // ---------------------------------------------------------------------------
@@ -215,8 +220,11 @@ class DashboardStore {
   selectedIndicatorId = '15'
   scenarioType: ScenarioType = 'base'
   timeRange: 'all' | 'last5' | 'last10' = 'last10'
+  selectedModelId: number | null = null
 
+  modelOptions: ApiModel[] = []
   dashboardData: ApiDashboard | null = null
+  isModelsLoading = false
   isLoading = false
   error: string | null = null
 
@@ -225,15 +233,47 @@ class DashboardStore {
     makeAutoObservable(this, { indicatorStore: false }, { autoBind: true })
   }
 
-  async fetchDashboard() {
+  async initializeDashboard() {
+    await this.fetchModels()
+    await this.fetchDashboard()
+  }
+
+  async fetchModels() {
+    this.isModelsLoading = true
+    try {
+      const res = await fetch('/api/models')
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data: ApiModel[] = await res.json()
+      runInAction(() => {
+        this.modelOptions = data
+        if (this.selectedModelId == null && data.length > 0) {
+          this.selectedModelId = data[0].id
+        }
+        this.isModelsLoading = false
+      })
+    } catch {
+      runInAction(() => {
+        this.modelOptions = []
+        this.isModelsLoading = false
+      })
+    }
+  }
+
+  async fetchDashboard(modelId: number | null = this.selectedModelId) {
     this.isLoading = true
     this.error = null
     try {
-      const res = await fetch('/api/dashboard')
+      const params = new URLSearchParams()
+      if (modelId != null) {
+        params.set('model_id', String(modelId))
+      }
+      const query = params.toString()
+      const res = await fetch(query ? `/api/dashboard?${query}` : '/api/dashboard')
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data: ApiDashboard = await res.json()
       runInAction(() => {
         this.dashboardData = data
+        this.selectedModelId = data.model?.id ?? modelId
         if (data.target_indicator) {
           this.selectedIndicatorId = String(data.target_indicator.id)
         }
@@ -249,6 +289,12 @@ class DashboardStore {
 
   setSelectedIndicator(id: string) {
     this.selectedIndicatorId = id
+  }
+
+  setSelectedModel(id: string) {
+    const parsed = Number(id)
+    this.selectedModelId = Number.isFinite(parsed) ? parsed : null
+    void this.fetchDashboard(this.selectedModelId)
   }
 
   setScenarioType(type: ScenarioType) {
@@ -283,15 +329,31 @@ class DashboardStore {
       actual: h.value,
     }))
 
+    const estimate = this.dashboardData.forecasts['Оценка'] ?? []
     const selected = this.dashboardData.forecasts[this.scenarioApiName] ?? []
-    const optimistic = this.dashboardData.forecasts['Оптимистичный'] ?? []
-    const pessimistic = this.dashboardData.forecasts['Пессимистичный'] ?? []
+    const base = this.dashboardData.forecasts['Базовый'] ?? []
+    const conservative = this.dashboardData.forecasts['Консервативный'] ?? []
 
-    const forecast: TimeSeriesPoint[] = selected.map((f, i) => ({
+    const bandByYear = new Map<number, { lower?: number; upper?: number }>()
+    ;[...estimate, ...base].forEach((point) => {
+      bandByYear.set(point.year, {
+        ...(bandByYear.get(point.year) ?? {}),
+        upper: point.value,
+      })
+    })
+    ;[...estimate, ...conservative].forEach((point) => {
+      bandByYear.set(point.year, {
+        ...(bandByYear.get(point.year) ?? {}),
+        lower: point.value,
+      })
+    })
+
+    const forecastSource = [...estimate, ...selected].sort((a, b) => a.year - b.year)
+    const forecast: TimeSeriesPoint[] = forecastSource.map((f) => ({
       year: f.year,
       forecast: f.value,
-      upper: optimistic[i]?.value,
-      lower: pessimistic[i]?.value,
+      upper: bandByYear.get(f.year)?.upper,
+      lower: bandByYear.get(f.year)?.lower,
     }))
 
     return [...history, ...forecast]

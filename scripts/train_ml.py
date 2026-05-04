@@ -6,7 +6,8 @@
 
 Что делает:
     1. Читает данные из indicators.db
-    2. Обучает все конфигурации sklearn-моделей с walk-forward валидацией
+    2. Перебирает 3 конфигурации × все модели через walk-forward валидацию
+       (baseline / log_target / lagged_log_target)
     3. Сохраняет лучшую модель (.pkl) в models/ml/
     4. Пишет ForecastRun, Model, ModelMetric, ForecastResult, ShapContribution в models.db
 """
@@ -24,14 +25,22 @@ import joblib
 import numpy as np
 import pandas as pd
 import shap
-from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
+from sklearn.base import clone
+from sklearn.compose import TransformedTargetRegressor
+from sklearn.ensemble import (
+    AdaBoostRegressor,
+    ExtraTreesRegressor,
+    GradientBoostingRegressor,
+    RandomForestRegressor,
+)
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import ElasticNet, Lasso, LinearRegression, Ridge
 from sklearn.neighbors import KNeighborsRegressor
 from sklearn.neural_network import MLPRegressor
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import FunctionTransformer, StandardScaler
 from sklearn.svm import SVR
+from sklearn.tree import DecisionTreeRegressor
 
 import db
 from forecast_utils import (
@@ -41,6 +50,7 @@ from forecast_utils import (
     FORECAST_HORIZON,
     build_all_scenario_frames,
     evaluate_predictions,
+    remap_forecast_rows_for_db,
     walk_forward_validate,
 )
 
@@ -50,7 +60,32 @@ MODELS_DIR.mkdir(parents=True, exist_ok=True)
 MIN_TRAIN_SIZE = 12
 
 # ---------------------------------------------------------------------------
-# Конфигурации моделей
+# Лаговые признаки
+# ---------------------------------------------------------------------------
+
+LAG_FEATURES = [
+    TARGET_COLUMN,
+    "Ввод в действие основных фондов",
+    "Валовой региональный продукт на душу населения",
+    "Среднемесячная номинальная начисленная заработная плата работников организаций",
+    "Потребительские расходы в среднем на душу населения",
+]
+
+
+def add_lag_features(
+    df: pd.DataFrame,
+    columns: list[str],
+    lags: tuple[int, ...] = (1, 2),
+) -> pd.DataFrame:
+    lagged_df = df.copy()
+    for col in columns:
+        for lag in lags:
+            lagged_df[f"{col}_lag_{lag}"] = lagged_df[col].shift(lag)
+    return lagged_df
+
+
+# ---------------------------------------------------------------------------
+# Конфигурации моделей — scaled (линейные, SVR, KNN, MLP) и tree (деревья)
 # ---------------------------------------------------------------------------
 
 def make_pipeline(estimator) -> Pipeline:
@@ -61,37 +96,73 @@ def make_pipeline(estimator) -> Pipeline:
     ])
 
 
+def build_scaled_model(estimator) -> Pipeline:
+    return make_pipeline(estimator)
+
+
+def build_tree_model(estimator) -> Pipeline:
+    return Pipeline([
+        ("imputer", SimpleImputer(strategy="median")),
+        ("model",   estimator),
+    ])
+
+
 MODEL_CONFIGS: dict[str, Pipeline] = {
-    "LinearRegression":    make_pipeline(LinearRegression()),
-    "Ridge":               make_pipeline(Ridge(alpha=1.0)),
-    "Lasso":               make_pipeline(Lasso(alpha=0.1, max_iter=5000)),
-    "ElasticNet":          make_pipeline(ElasticNet(alpha=0.1, l1_ratio=0.5, max_iter=5000)),
-    "RandomForest":        make_pipeline(RandomForestRegressor(n_estimators=100, random_state=42)),
-    "GradientBoosting":    make_pipeline(GradientBoostingRegressor(n_estimators=100, random_state=42)),
-    "SVR":                 make_pipeline(SVR(kernel="rbf", C=1.0)),
-    "KNN":                 make_pipeline(KNeighborsRegressor(n_neighbors=5)),
-    "MLP":                 make_pipeline(MLPRegressor(hidden_layer_sizes=(64, 32), max_iter=1000, random_state=42)),
+    "LinearRegression": build_scaled_model(LinearRegression()),
+    "Ridge":            build_scaled_model(Ridge(alpha=1.0)),
+    "Lasso":            build_scaled_model(Lasso(alpha=0.01, max_iter=10000, random_state=42)),
+    "ElasticNet":       build_scaled_model(ElasticNet(alpha=0.01, l1_ratio=0.5, max_iter=10000, random_state=42)),
+    "SVR_rbf":          build_scaled_model(SVR(kernel="rbf", C=10.0, epsilon=0.1)),
+    "KNN":              build_scaled_model(KNeighborsRegressor(n_neighbors=3, weights="distance")),
+    "DecisionTree":     build_tree_model(DecisionTreeRegressor(max_depth=4, random_state=42)),
+    "RandomForest":     build_tree_model(RandomForestRegressor(n_estimators=300, max_depth=5, random_state=42)),
+    "ExtraTrees":       build_tree_model(ExtraTreesRegressor(n_estimators=300, max_depth=5, random_state=42)),
+    "GradientBoosting": build_tree_model(GradientBoostingRegressor(n_estimators=200, learning_rate=0.05, max_depth=3, random_state=42)),
+    "AdaBoost":         build_tree_model(AdaBoostRegressor(n_estimators=200, learning_rate=0.05, random_state=42)),
+    "MLPRegressor":     build_scaled_model(MLPRegressor(
+        hidden_layer_sizes=(64, 32), activation="relu", solver="adam",
+        alpha=0.0001, learning_rate_init=0.001, max_iter=5000, random_state=42,
+    )),
 }
 
 
 # ---------------------------------------------------------------------------
-# Log-target wrapper
+# Обёртка с преобразованием таргета (TransformedTargetRegressor)
 # ---------------------------------------------------------------------------
 
+def wrap_for_target(model: Pipeline, use_log_target: bool = False) -> TransformedTargetRegressor:
+    if use_log_target:
+        transformer = FunctionTransformer(np.log1p, np.expm1, validate=True)
+    else:
+        transformer = StandardScaler()
+    return TransformedTargetRegressor(regressor=clone(model), transformer=transformer)
+
+
 class LogTargetWrapper:
+    """Совместимый helper для тестов; production-код использует wrap_for_target."""
+
     def __init__(self, pipeline: Pipeline):
-        self._pipe = pipeline
+        self._model = wrap_for_target(pipeline, use_log_target=True)
 
     def fit(self, X, y):
-        self._pipe.fit(X, np.log1p(y))
+        self._model.fit(X, y)
         return self
 
     def predict(self, X) -> np.ndarray:
-        return np.expm1(self._pipe.predict(X))
+        return self._model.predict(X)
+
+
+def build_fit_predict(model: Pipeline, use_log: bool = False):
+    """Возвращает замыкание fit_predict(X_train, y_train, X_test) -> float для walk_forward_validate."""
+    def fit_predict(X_train, y_train, X_test) -> float:
+        wrapped = wrap_for_target(model, use_log_target=use_log)
+        wrapped.fit(X_train, y_train)
+        return float(wrapped.predict(X_test)[0])
+    return fit_predict
 
 
 # ---------------------------------------------------------------------------
-# Вспомогательные функции
+# Загрузка данных
 # ---------------------------------------------------------------------------
 
 def load_data() -> pd.DataFrame:
@@ -105,124 +176,160 @@ def get_feature_indicator_ids() -> dict[str, int]:
     return {feat: name_to_id[feat] for feat in SELECTED_FEATURES if feat in name_to_id}
 
 
-def build_fit_predict(pipeline, use_log: bool = False):
-    """Возвращает замыкание для walk_forward_validate."""
-    def fit_predict(X_train, y_train, X_test) -> float:
-        if use_log:
-            wrapper = LogTargetWrapper(pipeline)
-            wrapper.fit(X_train, y_train)
-            return float(wrapper.predict(X_test)[0])
-        else:
-            pipeline.fit(X_train, y_train)
-            return float(pipeline.predict(X_test)[0])
-    return fit_predict
-
-
 # ---------------------------------------------------------------------------
-# Walk-forward для всех моделей
+# Walk-forward по всем конфигурациям
 # ---------------------------------------------------------------------------
 
-def run_walk_forward(df: pd.DataFrame) -> pd.DataFrame:
+def run_walk_forward(
+    model_df: pd.DataFrame,
+    lagged_model_df: pd.DataFrame,
+    lagged_features: list[str],
+) -> pd.DataFrame:
     print("Walk-forward валидация...")
     summary_rows = []
 
-    for algo_name, pipeline in MODEL_CONFIGS.items():
-        for use_log in [False, True]:
-            config_name = f"{algo_name}{'_log' if use_log else ''}"
+    configs = [
+        ("baseline",           model_df,        SELECTED_FEATURES, False),
+        ("log_target",         model_df,        SELECTED_FEATURES, True),
+        ("lagged_log_target",  lagged_model_df, lagged_features,   True),
+    ]
+
+    for config_name, data_df, features, use_log in configs:
+        for algo_name, pipeline in MODEL_CONFIGS.items():
+            exp_name = f"{config_name}|{algo_name}"
             fn = build_fit_predict(pipeline, use_log=use_log)
-            summary, _ = walk_forward_validate(df, SELECTED_FEATURES, fn, MIN_TRAIN_SIZE)
-            summary_rows.append({
-                "config":     config_name,
-                "algorithm":  algo_name,
-                "use_log":    use_log,
-                **summary.iloc[0].to_dict(),
-            })
-            print(f"  {config_name}: MAPE={summary['walk_forward_mape'].iloc[0]:.4f}")
+            summary, _ = walk_forward_validate(data_df, features, fn, MIN_TRAIN_SIZE)
+            row = {
+                "experiment_id": exp_name,
+                "configuration":  config_name,
+                "algorithm":      algo_name,
+                "use_log":        use_log,
+                "walk_forward_mae":  float(summary["walk_forward_mae"].iloc[0]),
+                "walk_forward_rmse": float(summary["walk_forward_rmse"].iloc[0]),
+                "walk_forward_mape": float(summary["walk_forward_mape"].iloc[0]),
+            }
+            summary_rows.append(row)
+            print(f"  {exp_name}: MAPE={row['walk_forward_mape']:.4f}")
 
     return pd.DataFrame(summary_rows).sort_values("walk_forward_mape").reset_index(drop=True)
 
 
 # ---------------------------------------------------------------------------
-# Финальное обучение + прогноз + SHAP
+# Финальное обучение, прогноз, SHAP
 # ---------------------------------------------------------------------------
 
 def train_and_forecast(
-    df: pd.DataFrame,
-    algo_name: str,
-    use_log: bool,
+    model_df: pd.DataFrame,
+    lagged_model_df: pd.DataFrame,
+    lagged_features: list[str],
+    best_configuration: str,
+    best_algo: str,
     id_run: int,
     feature_ids: dict[str, int],
+    wf_summary_row: pd.Series,
 ) -> int:
-    """Обучает модель на всех данных, сохраняет в БД и на диск. Возвращает id_model."""
-    pipeline = MODEL_CONFIGS[algo_name]
-    X_train = df[SELECTED_FEATURES].to_numpy()
-    y_train = df[TARGET_COLUMN].to_numpy()
+    use_log = bool(wf_summary_row["use_log"])
 
-    if use_log:
-        model = LogTargetWrapper(pipeline)
-        model.fit(X_train, y_train)
-        predict_fn = model.predict
+    if best_configuration == "baseline":
+        production_df       = model_df.copy()
+        production_features = SELECTED_FEATURES
+    elif best_configuration == "log_target":
+        production_df       = model_df.copy()
+        production_features = SELECTED_FEATURES
     else:
-        pipeline.fit(X_train, y_train)
-        predict_fn = pipeline.predict
+        production_df       = lagged_model_df.dropna().reset_index(drop=True)
+        production_features = lagged_features
 
-    # --- Walk-forward метрики финальной модели ---
-    fn = build_fit_predict(pipeline, use_log)
-    summary, _ = walk_forward_validate(df, SELECTED_FEATURES, fn, MIN_TRAIN_SIZE)
-    mae  = float(summary["walk_forward_mae"].iloc[0])
-    rmse = float(summary["walk_forward_rmse"].iloc[0])
-    mape = float(summary["walk_forward_mape"].iloc[0])
+    pipeline = MODEL_CONFIGS[best_algo]
+    production_model = wrap_for_target(pipeline, use_log_target=use_log)
+    production_model.fit(
+        production_df[production_features].to_numpy(),
+        production_df[TARGET_COLUMN].to_numpy(),
+    )
 
     # --- Сохранение модели на диск ---
-    model_path = MODELS_DIR / f"{algo_name}{'_log' if use_log else ''}.pkl"
-    joblib.dump(pipeline if not use_log else model, model_path)
+    model_path = MODELS_DIR / f"{best_configuration}_{best_algo}.pkl"
+    joblib.dump(production_model, model_path)
 
     # --- Запись в БД ---
     id_model = db.save_model(
         id_run=id_run,
-        model_name=f"{algo_name}{'_log' if use_log else ''}",
+        model_name=f"{best_configuration}|{best_algo}",
         model_type="machine_learning",
-        algorithm=algo_name,
+        algorithm=best_algo,
         status="trained",
         model_path=str(model_path.relative_to(ROOT)),
     )
-    db.save_metrics(id_model, mae, rmse, mape)
+    db.save_metrics(
+        id_model,
+        float(wf_summary_row["walk_forward_mae"]),
+        float(wf_summary_row["walk_forward_rmse"]),
+        float(wf_summary_row["walk_forward_mape"]),
+    )
 
     # --- Сценарный прогноз ---
-    scenario_frames = build_all_scenario_frames(df, SELECTED_FEATURES, FORECAST_HORIZON)
-    forecast_rows = []
-    shap_meta = []  # (id_result_key, X_row, year, scenario)
+    base_year = int(model_df[YEAR_COLUMN].max())
+    latest_fact_year = base_year
+    scenario_frames = build_all_scenario_frames(model_df, SELECTED_FEATURES, FORECAST_HORIZON)
+    raw_forecast_rows = []
+    shap_meta = []  # (year, scenario_name, X_row)
 
-    for scenario_name, future_df in scenario_frames.items():
-        X_future = future_df[SELECTED_FEATURES].to_numpy()
-        preds = predict_fn(X_future)
-        for i, year in enumerate(future_df[YEAR_COLUMN].tolist()):
-            forecast_rows.append({
-                "year":           int(year),
+    for scenario_name, scenario_cfg_df in scenario_frames.items():
+        forecast_base_df = pd.concat([model_df, scenario_cfg_df], ignore_index=True)
+
+        for forecast_year in range(latest_fact_year + 1, latest_fact_year + FORECAST_HORIZON + 1):
+            step = forecast_year - latest_fact_year
+            forecast_idx = forecast_base_df.index[forecast_base_df[YEAR_COLUMN] == forecast_year][0]
+
+            if best_configuration == "lagged_log_target":
+                temp_lagged_df = add_lag_features(
+                    forecast_base_df.iloc[: forecast_idx + 1].copy(), LAG_FEATURES, lags=(1, 2)
+                )
+                feature_row = temp_lagged_df.iloc[[-1]][production_features].to_numpy()
+            else:
+                feature_row = forecast_base_df.iloc[[forecast_idx]][production_features].to_numpy()
+
+            prediction = float(production_model.predict(feature_row)[0])
+            forecast_base_df.loc[forecast_idx, TARGET_COLUMN] = prediction
+
+            raw_forecast_rows.append({
+                "year":           forecast_year,
                 "scenario_name":  scenario_name,
-                "forecast_value": float(preds[i]),
+                "forecast_value": prediction,
             })
-            shap_meta.append((int(year), scenario_name, X_future[i]))
+            shap_meta.append((forecast_year, scenario_name, feature_row[0]))
 
+    forecast_rows = remap_forecast_rows_for_db(raw_forecast_rows, base_year)
     result_ids = db.save_forecast_results(id_model, forecast_rows)
 
-    # --- SHAP ---
-    print(f"  Вычисляем SHAP для {algo_name}...")
-    background = df[SELECTED_FEATURES].to_numpy()
-    explainer = shap.Explainer(predict_fn, background)
+    shap_meta_remapped = []
+    for year, scenario_name, x_row in shap_meta:
+        if year == base_year + 1:
+            if scenario_name == "Базовый":
+                shap_meta_remapped.append((year, "Оценка", x_row))
+        else:
+            shap_meta_remapped.append((year, scenario_name, x_row))
 
-    all_X = np.array([m[2] for m in shap_meta])
+    # --- SHAP ---
+    print(f"  Вычисляем SHAP для {best_algo}...")
+    background = production_df[production_features].to_numpy()
+    predict_fn = production_model.predict
+
+    explainer = shap.Explainer(predict_fn, background)
+    all_X = np.array([m[2] for m in shap_meta_remapped])
     explanation = explainer(all_X)
     shap_values = np.asarray(explanation.values)
 
     shap_contributions = []
-    for row_idx, (year, scenario_name, _) in enumerate(shap_meta):
-        id_result = result_ids[(year, scenario_name)]
+    for row_idx, (year, scenario_name, _) in enumerate(shap_meta_remapped):
+        id_result = result_ids.get((year, scenario_name))
+        if id_result is None:
+            continue
         row_shap = shap_values[row_idx]
         ranked = np.argsort(np.abs(row_shap))[::-1]
 
         for rank, feat_idx in enumerate(ranked):
-            feat_name = SELECTED_FEATURES[feat_idx]
+            feat_name = production_features[feat_idx]
             contrib = float(row_shap[feat_idx])
             shap_contributions.append({
                 "id_result":          id_result,
@@ -233,7 +340,6 @@ def train_and_forecast(
             })
 
     db.save_shap_contributions(shap_contributions)
-
     return id_model
 
 
@@ -247,14 +353,17 @@ def main():
     df = load_data()
     print(f"Данные загружены: {len(df)} лет ({int(df[YEAR_COLUMN].min())}–{int(df[YEAR_COLUMN].max())})")
 
-    # Определяем роли показателей
+    lagged_df = add_lag_features(df, LAG_FEATURES, lags=(1, 2))
+    lagged_features: list[str] = SELECTED_FEATURES + [
+        col for col in lagged_df.columns
+        if any(col == f"{base}_lag_{lag}" for base in LAG_FEATURES for lag in (1, 2))
+    ]
+
     feature_ids = get_feature_indicator_ids()
     target_id   = db.get_indicator_id(TARGET_COLUMN)
-
     train_start = int(df[YEAR_COLUMN].min())
     train_end   = int(df[YEAR_COLUMN].max())
 
-    # --- ForecastRun ---
     id_run = db.save_run(
         forecast_horizon=FORECAST_HORIZON,
         train_start_year=train_start,
@@ -267,19 +376,20 @@ def main():
     print(f"ForecastRun id={id_run} создан")
 
     try:
-        # --- Walk-forward по всем конфигурациям ---
-        wf_summary = run_walk_forward(df)
+        wf_summary = run_walk_forward(df, lagged_df, lagged_features)
         print("\nТоп-5 конфигураций:")
-        print(wf_summary[["config", "walk_forward_mape", "walk_forward_mae"]].head())
+        print(wf_summary[["experiment_id", "walk_forward_mape", "walk_forward_mae"]].head())
 
-        # --- Лучшая конфигурация ---
         best = wf_summary.iloc[0]
-        best_algo  = best["algorithm"]
-        best_log   = bool(best["use_log"])
-        print(f"\nЛучшая конфигурация: {best['config']} (MAPE={best['walk_forward_mape']:.4f})")
+        best_configuration = best["configuration"]
+        best_algo          = best["algorithm"]
+        print(f"\nЛучшая конфигурация: {best['experiment_id']} (MAPE={best['walk_forward_mape']:.4f})")
 
-        # --- Финальное обучение ---
-        id_model = train_and_forecast(df, best_algo, best_log, id_run, feature_ids)
+        id_model = train_and_forecast(
+            df, lagged_df, lagged_features,
+            best_configuration, best_algo,
+            id_run, feature_ids, best,
+        )
         print(f"Модель сохранена: id_model={id_model}")
 
         db.update_run_status(id_run, "completed")

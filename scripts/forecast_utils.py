@@ -18,7 +18,7 @@ SELECTED_FEATURES = [
     "Среднедушевые денежные доходы населения в год",
     "Оборот розничной торговли",
     "Среднемесячная номинальная начисленная заработная плата работников организаций",
-    "Численность населения",
+    "Численность населения Тюменской области",
     "Стоимость основных фондов по Тюм обл, на конец года, по полной учетной стоимости",
     "Задолженность по кредитам в рублях, предоставленным кредитными организациями физическим лицам",
     "Валовой региональный продукт на душу населения",
@@ -29,6 +29,7 @@ SELECTED_FEATURES = [
 
 # Негативные факторы — при сценарии "вниз" усиливаются, при "вверх" снижаются
 NEGATIVE_SCENARIO_FEATURES = {
+    "Население в трудоспособном возрасте",
     "Индексы потребительских цен",
     "Удельный вес убыточных организаций",
 }
@@ -185,6 +186,33 @@ def build_all_scenario_frames(
             df, name, cfg, conservative_pattern, features, horizon
         )
     return result
+
+
+def remap_forecast_rows_for_db(
+    forecast_rows: list[dict],
+    base_year: int,
+) -> list[dict]:
+    """
+    Ремаппинг сценариев для записи в БД:
+    - Год base_year+1 → scenario_name='Оценка' (одно значение, берём из 'Базовый')
+    - Годы base_year+2..+4 → 'Базовый' и 'Консервативный' как есть
+    """
+    first_forecast_year = base_year + 1
+    remapped: list[dict] = []
+    seen_estimate = False
+
+    for row in forecast_rows:
+        if row["year"] == first_forecast_year:
+            if row["scenario_name"] == "Базовый" and not seen_estimate:
+                remapped.append({
+                    **row,
+                    "scenario_name": "Оценка",
+                })
+                seen_estimate = True
+        else:
+            remapped.append(row)
+
+    return remapped
 
 
 # ---------------------------------------------------------------------------

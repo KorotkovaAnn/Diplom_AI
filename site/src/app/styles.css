@@ -1315,6 +1315,9 @@ body {
 
 .shap-panel {
   padding: 14px 16px 12px;
+  position: relative;
+  z-index: 3;
+  overflow: visible;
 }
 
 .shap-panel.glass-panel {
@@ -1334,7 +1337,34 @@ body {
 }
 
 .shap-chart-wrapper {
-  height: 260px;
+  height: 360px;
+  margin-top: 14px;
+  overflow: visible;
+}
+
+.shap-tooltip {
+  width: min(340px, calc(100vw - 48px));
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.98);
+  border: 1px solid rgba(148, 163, 184, 0.38);
+  box-shadow: 0 16px 34px rgba(15, 23, 42, 0.18);
+  color: var(--text);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.shap-tooltip-title {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 6px;
+  white-space: normal;
+}
+
+.shap-tooltip-value {
+  font-size: 12px;
+  color: var(--text-soft);
+  white-space: nowrap;
 }
 
 .shap-caption {
@@ -1345,6 +1375,8 @@ body {
 
 .shap-insights {
   padding: 14px 16px 12px;
+  position: relative;
+  z-index: 1;
 }
 
 .shap-insights.glass-panel {
@@ -2047,4 +2079,3 @@ body {
     align-items: flex-start;
   }
 }
-
