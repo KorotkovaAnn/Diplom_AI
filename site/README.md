@@ -8,7 +8,7 @@
 
 **Установка зависимостей и запуск проекта:**
 
-Требуется **Node.js: 22.x (LTS)**[
+Требуется **Node.js: 22.x (LTS)**
 
 ```bash
 # Установка зависимостей
@@ -21,7 +21,7 @@ $ npm run dev
 ## Стек
 
 - **Язык:** [TypeScript](https://www.typescriptlang.org) — `^5.9.3`
-- **Фреймворк:** [React](https://react.dev/) — `^18.3.1`
+- **Фреймворк:** [React](https://react.dev/) — `^19.2.0`
 - **Стейт менеджер:** [MobX](https://mobx.js.org/react-integration.html) — `^6.15.0`
 - **Сборщик:** [Vite](https://vite.dev/guide/) — `vite@7.3.1`
 - **Роутинг:** [React Router DOM](https://reactrouter.com/en/main) — `^7.13.1`
@@ -30,3 +30,14 @@ $ npm run dev
 ## Архитектура проекта
 
 Feature-Sliced Design - [FSD](https://feature-sliced.design/docs/get-started/overview)
+
+## Текущие разделы
+
+- `/` — главная страница с метриками из БД и быстрыми действиями
+- `/dashboards` — аналитический дашборд по target-показателям
+- `/forecasts` — сводка прогнозов
+- `/indicators` — заготовка аналитики показателей
+- `/data-upload` — заготовка ручной загрузки данных
+- `/scenarios` — сценарное моделирование
+
+Фронтенд получает данные через FastAPI-прокси Vite (`/api` → `http://localhost:8000`).

@@ -1,3 +1,5 @@
+import { Link } from 'react-router-dom'
+
 export function Footer() {
   return (
     <footer className="app-footer">
@@ -22,19 +24,21 @@ export function Footer() {
         <div className="footer-column">
           <h3 className="footer-heading">Разделы</h3>
           <ul className="footer-links">
-            <li>Главная</li>
-            <li>Дашборды</li>
-            <li>Показатели</li>
-            <li>Прогнозы</li>
-          </ul>
-        </div>
-
-        <div className="footer-column">
-          <h3 className="footer-heading">Для разработчиков</h3>
-          <ul className="footer-links">
-            <li>Документация</li>
-            <li>API</li>
-            <li>Поддержка</li>
+            <li>
+              <Link to="/">Главная</Link>
+            </li>
+            <li>
+              <Link to="/dashboards">Дашборды</Link>
+            </li>
+            <li>
+              <Link to="/forecasts">Прогнозы</Link>
+            </li>
+            <li>
+              <Link to="/indicators">Показатели</Link>
+            </li>
+            <li>
+              <Link to="/data-upload">Загрузка данных</Link>
+            </li>
           </ul>
         </div>
 
@@ -57,4 +61,3 @@ export function Footer() {
     </footer>
   )
 }
-

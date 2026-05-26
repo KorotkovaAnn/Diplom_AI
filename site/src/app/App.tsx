@@ -4,8 +4,8 @@ import { HomePage } from '../pages/HomePage'
 import { DashboardsPage } from '../pages/DashboardsPage'
 import { ForecastsPage } from '../pages/ForecastsPage'
 import { ScenarioModelingPage } from '../pages/ScenarioModelingPage'
-import { AboutPage } from '../pages/AboutPage'
-import { DocsPage } from '../pages/DocsPage'
+import { IndicatorsPage } from '../pages/IndicatorsPage'
+import { DataUploadPage } from '../pages/DataUploadPage'
 
 export function App() {
   return (
@@ -14,10 +14,10 @@ export function App() {
         <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/dashboards" element={<DashboardsPage />} />
+          <Route path="/indicators" element={<IndicatorsPage />} />
           <Route path="/forecasts" element={<ForecastsPage />} />
           <Route path="/scenarios" element={<ScenarioModelingPage />} />
-          <Route path="/about" element={<AboutPage />} />
-          <Route path="/docs" element={<DocsPage />} />
+          <Route path="/data-upload" element={<DataUploadPage />} />
         </Routes>
       </MainLayout>
     </BrowserRouter>

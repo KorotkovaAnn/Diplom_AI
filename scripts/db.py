@@ -173,23 +173,53 @@ def save_metrics(id_model: int, mae: float, rmse: float, mape: float) -> None:
         conn.commit()
 
 
+def get_model_target_indicator_id(id_model: int) -> int:
+    """Возвращает id target-показателя для модели через связанный ForecastRun."""
+    with get_models_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT rr.id_indicator
+            FROM Model m
+            JOIN RunIndicatorRole rr ON rr.id_run = m.id_run AND rr.role = 'target'
+            WHERE m.id_model = ?
+            """,
+            (id_model,),
+        ).fetchone()
+
+    if row is None:
+        raise ValueError(f"Для модели id_model={id_model} не найден target-показатель")
+
+    return row[0]
+
+
 def save_forecast_results(
     id_model: int,
     rows: list[dict],
+    id_indicator: int | None = None,
 ) -> dict[tuple[int, str], int]:
     """
     rows — список словарей с ключами: year, scenario_name, forecast_value.
+    id_indicator — target-показатель прогноза; если None, определяется по модели.
     Возвращает маппинг (year, scenario_name) -> id_result.
     """
     result_ids: dict[tuple[int, str], int] = {}
+    target_indicator_id = id_indicator if id_indicator is not None else get_model_target_indicator_id(id_model)
+
     with get_models_conn() as conn:
         for row in rows:
             cur = conn.execute(
                 """
-                INSERT INTO ForecastResult (id_model, year, scenario_name, forecast_value)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO ForecastResult
+                    (id_model, id_indicator, year, scenario_name, forecast_value)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (id_model, row["year"], row["scenario_name"], row["forecast_value"]),
+                (
+                    id_model,
+                    target_indicator_id,
+                    row["year"],
+                    row["scenario_name"],
+                    row["forecast_value"],
+                ),
             )
             result_ids[(row["year"], row["scenario_name"])] = cur.lastrowid
         conn.commit()

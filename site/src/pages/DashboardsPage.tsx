@@ -22,7 +22,7 @@ export const DashboardsPage = observer(function DashboardsPage() {
 
   useEffect(() => {
     dashboards.initializeDashboard()
-    indicators.fetchIndicators()
+    indicators.fetchIndicators('target')
   }, [dashboards, indicators])
 
   const series = dashboards.timeSeries
@@ -241,7 +241,7 @@ export const DashboardsPage = observer(function DashboardsPage() {
                         ? `${(dashboards.modelInfo.mape * 100).toFixed(1)}%`
                         : '—'}
                     </div>
-                    <div className="dashboard-kpi-caption">
+                    <div className="dashboard-kpi-caption dashboard-kpi-model-caption">
                       {dashboards.modelInfo ? modelCardCaption(dashboards.modelInfo) : '—'}
                     </div>
                   </div>
@@ -362,6 +362,49 @@ export const DashboardsPage = observer(function DashboardsPage() {
 
           {/* SHAP-анализ */}
           <section className="dashboard-grid" style={{ marginTop: 18 }}>
+            <aside className="shap-insights glass-panel">
+              <h2 className="home-section-title">Ключевые инсайты</h2>
+              <p className="home-section-subtitle">
+                Автоматически выделенные драйверы роста и факторы снижения по текущему показателю.
+              </p>
+              <div className="shap-insights-grid">
+                <div className="shap-insight-card">
+                  <div className="shap-insight-title">Топ-3 фактора роста</div>
+                  <ul className="shap-insight-list">
+                    {positiveFactors.length > 0 ? (
+                      positiveFactors.map((f) => (
+                        <li key={f.id}>
+                          <span className="shap-factor-name">{f.name}</span>
+                          <span className="shap-factor-value">
+                            +{(f.contribution * 100).toFixed(1)}%
+                          </span>
+                        </li>
+                      ))
+                    ) : (
+                      <li style={{ color: '#9ca3af' }}>Нет данных</li>
+                    )}
+                  </ul>
+                </div>
+                <div className="shap-insight-card">
+                  <div className="shap-insight-title">Топ-3 фактора снижения</div>
+                  <ul className="shap-insight-list">
+                    {negativeFactors.length > 0 ? (
+                      negativeFactors.map((f) => (
+                        <li key={f.id}>
+                          <span className="shap-factor-name">{f.name}</span>
+                          <span className="shap-factor-value shap-factor-negative">
+                            {(f.contribution * 100).toFixed(1)}%
+                          </span>
+                        </li>
+                      ))
+                    ) : (
+                      <li style={{ color: '#9ca3af' }}>Нет данных</li>
+                    )}
+                  </ul>
+                </div>
+              </div>
+            </aside>
+
             <section className="shap-panel glass-panel">
               <h2 className="home-section-title">SHAP-анализ вклада факторов</h2>
               <p className="home-section-subtitle">
@@ -390,13 +433,15 @@ export const DashboardsPage = observer(function DashboardsPage() {
                       <CartesianGrid horizontal={false} stroke="#e5e7eb" strokeDasharray="3 3" />
                       <XAxis
                         type="number"
+                        domain={[-0.3, 0.7]}
+                        ticks={[-0.2, 0, 0.2, 0.4, 0.6]}
                         tickFormatter={(v: number) => `${(v * 100).toFixed(0)}%`}
                       />
                       <YAxis
                         type="category"
                         dataKey="shortName"
-                        tick={{ fontSize: 11, width: 230 }}
-                        width={230}
+                        tick={{ fontSize: 12, width: 210 }}
+                        width={210}
                         interval={0}
                       />
                       <Tooltip
@@ -435,92 +480,6 @@ export const DashboardsPage = observer(function DashboardsPage() {
                 в верхней части диаграммы.
               </p>
             </section>
-
-            <aside className="shap-insights glass-panel">
-              <h2 className="home-section-title">Ключевые инсайты</h2>
-              <p className="home-section-subtitle">
-                Автоматически выделенные драйверы роста и факторы снижения по текущему показателю.
-              </p>
-              <div className="shap-insights-grid">
-                <div>
-                  <div className="shap-insight-title">Топ-3 фактора роста</div>
-                  <ul className="shap-insight-list">
-                    {positiveFactors.length > 0 ? (
-                      positiveFactors.map((f) => (
-                        <li key={f.id}>
-                          <span className="shap-factor-name">{f.name}</span>
-                          <span className="shap-factor-value">
-                            +{(f.contribution * 100).toFixed(1)}%
-                          </span>
-                        </li>
-                      ))
-                    ) : (
-                      <li style={{ color: '#9ca3af' }}>Нет данных</li>
-                    )}
-                  </ul>
-                </div>
-                <div>
-                  <div className="shap-insight-title">Топ-3 фактора снижения</div>
-                  <ul className="shap-insight-list">
-                    {negativeFactors.length > 0 ? (
-                      negativeFactors.map((f) => (
-                        <li key={f.id}>
-                          <span className="shap-factor-name">{f.name}</span>
-                          <span className="shap-factor-value shap-factor-negative">
-                            {(f.contribution * 100).toFixed(1)}%
-                          </span>
-                        </li>
-                      ))
-                    ) : (
-                      <li style={{ color: '#9ca3af' }}>Нет данных</li>
-                    )}
-                  </ul>
-                </div>
-              </div>
-            </aside>
-          </section>
-
-          {/* Расширенная аналитика */}
-          <section
-            className="glass-panel"
-            style={{ marginTop: 18, padding: '14px 18px 16px' }}
-          >
-            <h2 className="home-section-title">Расширенная аналитика</h2>
-            <p className="home-section-subtitle">
-              Дополнительные инструменты анализа: сценарии, корреляции, декомпозиция временного ряда
-              и метрики качества моделей.
-            </p>
-            <div className="advanced-grid">
-              <div className="advanced-block">
-                <div className="advanced-title">Сравнение сценариев</div>
-                <p className="advanced-text">
-                  Таблица с оценкой первого года, базовым и консервативным сценариями прогноза
-                  с визуальным сравнением траекторий.
-                </p>
-              </div>
-              <div className="advanced-block">
-                <div className="advanced-title">Корреляционная матрица</div>
-                <p className="advanced-text">
-                  Тепловая карта корреляций между факторами позволяет выявить мультиколлинеарность и
-                  скорректировать спецификацию моделей.
-                </p>
-              </div>
-              <div className="advanced-block">
-                <div className="advanced-title">Декомпозиция временного ряда</div>
-                <p className="advanced-text">
-                  Разложение на тренд, сезонность и остатки помогает объяснить структуру показателя и
-                  обосновать модельные допущения.
-                </p>
-              </div>
-              <div className="advanced-block">
-                <div className="advanced-title">Метрики качества моделей</div>
-                <p className="advanced-text">
-                  {dashboards.modelInfo
-                    ? `Лучшая модель: ${dashboards.modelInfo.name} — MAE: ${dashboards.modelInfo.mae?.toLocaleString('ru-RU', { maximumFractionDigits: 0 })}, RMSE: ${dashboards.modelInfo.rmse?.toLocaleString('ru-RU', { maximumFractionDigits: 0 })}, MAPE: ${dashboards.modelInfo.mape != null ? (dashboards.modelInfo.mape * 100).toFixed(1) : '—'}%.`
-                    : 'Набор ключевых метрик (RMSE, MAE, MAPE) показывает точность прогнозов и устойчивость моделей на исторических данных.'}
-                </p>
-              </div>
-            </div>
           </section>
         </>
       )}

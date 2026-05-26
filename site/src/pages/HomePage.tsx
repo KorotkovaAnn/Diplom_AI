@@ -1,11 +1,19 @@
-import { useState, useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { observer } from 'mobx-react-lite'
 import { Box, Button, Typography } from '@mui/material'
+import { useRootStore } from '../stores/rootStore.tsx'
 
-export function HomePage() {
+export const HomePage = observer(function HomePage() {
+  const { dashboards } = useRootStore()
+
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
   }, [])
+
+  useEffect(() => {
+    void dashboards.initializeDashboard()
+  }, [dashboards])
 
   return (
     <div className="home-page home-page-with-bg">
@@ -13,13 +21,32 @@ export function HomePage() {
       <HeroSection />
       <CapabilitiesAndMetrics />
       <ProcessAndQuickActions />
-      <TechStackSection />
-      <UpdatesAndFaq />
     </div>
   )
-}
+})
 
-function HeroSection() {
+const SCENARIO_BASE_NAME = 'Базовый'
+const SCENARIO_CONSERVATIVE_NAME = 'Консервативный'
+
+const HeroSection = observer(function HeroSection() {
+  const { dashboards } = useRootStore()
+  const kpis = dashboards.kpis
+  const modelInfo = dashboards.modelInfo
+  const forecastYearCount = getForecastYearCount(dashboards.dashboardData?.forecasts)
+  const targetTitle =
+    dashboards.targetName && dashboards.targetName !== '—'
+      ? dashboards.targetName
+      : 'Инвестиции в основной капитал'
+  const latestBaseForecast = getLatestForecastValue(
+    dashboards.dashboardData?.forecasts,
+    SCENARIO_BASE_NAME,
+  )
+  const latestConservativeForecast = getLatestForecastValue(
+    dashboards.dashboardData?.forecasts,
+    SCENARIO_CONSERVATIVE_NAME,
+  )
+  const estimateYear = dashboards.dashboardData?.forecasts['Оценка']?.[0]?.year
+
   return (
     <Box component="section" className="hero-section">
       <Box className="hero-panel glass-panel">
@@ -37,23 +64,23 @@ function HeroSection() {
           социально-экономических показателей региона
         </Typography>
 
-        <Typography component="p" className="hero-subtitle">
-          Комплексный анализ данных с применением машинного обучения и нейронных сетей
-          для точного прогнозирования показателей на 4 года вперёд. Интерпретируемые
-          результаты для обоснованных управленческих решений.
-        </Typography>
+        <Box className="hero-subtitle">
+          <Typography component="p">
+            Комплексный анализ данных с применением машинного обучения и нейронных
+            сетей для точного прогнозирования показателей на 4 года вперёд.
+          </Typography>
+          <Typography component="p" className="hero-subtitle-accent">
+            Интерпретируемые результаты для обоснованных управленческих решений.
+          </Typography>
+        </Box>
 
         <Box
+          className="hero-audience-grid"
           sx={{
-            mt: 2,
-            mb: 1.5,
-            display: 'grid',
-            gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-            gap: 2,
             fontSize: 12,
           }}
         >
-          <Box>
+          <Box className="hero-audience-card">
             <Typography variant="subtitle2" sx={{ fontSize: 13, mb: 0.5 }}>
               Для руководителей региона
             </Typography>
@@ -61,7 +88,7 @@ function HeroSection() {
               Сводка ключевых трендов и рисков в одном окне для подготовки решений.
             </Typography>
           </Box>
-          <Box>
+          <Box className="hero-audience-card">
             <Typography variant="subtitle2" sx={{ fontSize: 13, mb: 0.5 }}>
               Для аналитиков и экономистов
             </Typography>
@@ -69,7 +96,7 @@ function HeroSection() {
               Доступ к детализации показателей, методологии и качеству прогнозов.
             </Typography>
           </Box>
-          <Box>
+          <Box className="hero-audience-card">
             <Typography variant="subtitle2" sx={{ fontSize: 13, mb: 0.5 }}>
               Для инвесторов и партнёров
             </Typography>
@@ -89,53 +116,22 @@ function HeroSection() {
             gap: 1.25,
           }}
         >
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-            <Button
-              component={Link}
-              to="/dashboards"
-              variant="contained"
-              color="primary"
-              className="btn btn-primary"
-            >
-              Перейти к дашбордам
-            </Button>
-
-            <Button
-              variant="outlined"
-              color="error"
-              className="btn btn-ghost"
-              sx={{
-                justifyContent: 'center',
-                borderColor: 'rgba(220, 38, 38, 0.35)',
-                color: 'rgba(185, 28, 28, 0.9)',
-                '&:hover': {
-                  borderColor: 'rgba(220, 38, 38, 0.55)',
-                  backgroundColor: 'rgba(248, 113, 113, 0.04)',
-                },
-              }}
-            >
-              Скачать демо-отчёт (PDF)
-            </Button>
-          </Box>
-
           <Button
             component={Link}
-            to="/about"
-            variant="outlined"
+            to="/dashboards"
+            variant="contained"
             color="primary"
-            className="btn btn-outline"
+            className="btn btn-primary"
           >
-            О возможностях
+            Перейти к дашбордам
           </Button>
         </Box>
 
         <Box className="hero-benefits">
-          <span className="hero-benefit-item">48 социально-экономических показателей</span>
           <span className="hero-benefit-item">
             Прогноз на 4 года со сценарным коридором
           </span>
           <span className="hero-benefit-item">SHAP-анализ факторов влияния</span>
-          <span className="hero-benefit-item">Экспорт в PDF и Excel для отчётов</span>
         </Box>
       </Box>
 
@@ -144,60 +140,83 @@ function HeroSection() {
 
         <Box className="hero-visual-inner">
           <Box className="hero-overlay-card">
-            <Box className="hero-overlay-title">Инвестиции в основной капитал</Box>
+            <Box className="hero-overlay-title">{targetTitle}</Box>
             <Box className="hero-overlay-subtitle">
-              Прогноз +4 года со сценарным коридором и ключевыми драйверами роста.
+              {dashboards.isLoading && !dashboards.dashboardData
+                ? 'Загружаем данные из базы для главного показателя.'
+                : 'Фактические данные, прогноз и метрики модели подтягиваются из базы.'}
             </Box>
 
             <Box className="hero-metric-row">
               <Box>
-                <Box className="hero-metric-label">Текущее значение</Box>
-                <Box className="hero-metric-value">1 250 млрд ₽</Box>
+                <Box className="hero-metric-label">
+                  {kpis.currentYear ? `Факт за ${kpis.currentYear}` : 'Текущее значение'}
+                </Box>
+                <Box className="hero-metric-value">
+                  {formatIndicatorValue(kpis.currentValue, dashboards.targetUnit)}
+                </Box>
               </Box>
               <Box sx={{ textAlign: 'right' }}>
                 <Box className="hero-metric-label">Год к году</Box>
-                <Box className="hero-metric-change">+6,4%</Box>
+                <Box
+                  className={`hero-metric-change ${
+                    kpis.yoyChange == null ? '' : kpis.yoyChange >= 0 ? 'positive' : 'negative'
+                  }`}
+                >
+                  {formatPercent(kpis.yoyChange)}
+                </Box>
               </Box>
             </Box>
 
             <Box className="hero-metric-row">
               <Box>
                 <Box className="hero-metric-label">Горизонт прогноза</Box>
-                <Box className="hero-metric-value">+4 года</Box>
+                <Box className="hero-metric-value">
+                  {forecastYearCount > 0 ? `+${forecastYearCount} года` : '—'}
+                </Box>
               </Box>
               <Box sx={{ textAlign: 'right' }}>
                 <Box className="hero-metric-label">Точность моделей (MAPE)</Box>
-                <Box className="hero-metric-change">3,1%</Box>
+                <Box className="hero-metric-change positive">
+                  {modelInfo?.mape != null ? formatPlainPercent(modelInfo.mape * 100) : '—'}
+                </Box>
               </Box>
             </Box>
           </Box>
 
           <Box className="hero-overlay-card">
-            <Box className="hero-overlay-title">Инвестиции в основной капитал</Box>
+            <Box className="hero-overlay-title">{targetTitle}</Box>
             <Box className="hero-overlay-subtitle">
               Сценарный анализ: оценка первого года, базовый и консервативный варианты
               динамики инвестиций.
             </Box>
 
-            <Box className="hero-metric-row">
-              <Box>
+            <Box className="hero-metric-grid">
+              <Box className="hero-metric-cell">
                 <Box className="hero-metric-label">Базовый сценарий</Box>
-                <Box className="hero-metric-value">+18% к 2028 году</Box>
+                <Box className="hero-metric-value">
+                  {formatIndicatorValue(latestBaseForecast?.value ?? null, dashboards.targetUnit)}
+                </Box>
               </Box>
-              <Box sx={{ textAlign: 'right' }}>
+              <Box className="hero-metric-cell hero-metric-cell-accent">
                 <Box className="hero-metric-label">Оценка первого года</Box>
-                <Box className="hero-metric-change">2024</Box>
+                <Box className="hero-metric-change">{estimateYear ?? '—'}</Box>
               </Box>
-            </Box>
 
-            <Box className="hero-metric-row">
-              <Box>
+              <Box className="hero-metric-cell">
                 <Box className="hero-metric-label">Консервативный сценарий</Box>
-                <Box className="hero-metric-value">+9%</Box>
+                <Box className="hero-metric-value">
+                  {formatIndicatorValue(
+                    latestConservativeForecast?.value ?? null,
+                    dashboards.targetUnit,
+                  )}
+                </Box>
               </Box>
-              <Box sx={{ textAlign: 'right' }}>
-                <Box className="hero-metric-label">Основной драйвер</Box>
-                <Box className="hero-metric-change">Инфраструктурные проекты</Box>
+              <Box className="hero-metric-cell hero-metric-cell-accent">
+                <Box className="hero-metric-label">Год прогноза</Box>
+                <Box className="hero-metric-change">
+                  {latestBaseForecast?.year ?? latestConservativeForecast?.year ?? '—'}
+                </Box>
               </Box>
             </Box>
           </Box>
@@ -205,9 +224,79 @@ function HeroSection() {
       </Box>
     </Box>
   )
+})
+
+type ForecastMap = Record<string, { year: number; value: number }[]> | undefined
+
+function getForecastYearCount(forecasts: ForecastMap) {
+  if (!forecasts) return 0
+
+  const years = new Set<number>()
+  Object.values(forecasts).forEach((points) => {
+    points.forEach((point) => years.add(point.year))
+  })
+
+  return years.size
+}
+
+function getLatestForecastValue(forecasts: ForecastMap, scenarioName: string) {
+  const points = forecasts?.[scenarioName] ?? []
+  if (!points.length) return null
+
+  return [...points].sort((a, b) => b.year - a.year)[0]
+}
+
+function formatIndicatorValue(value: number | null | undefined, unit: string) {
+  if (value == null) return '—'
+
+  if (unit.toLowerCase().includes('млн') && unit.toLowerCase().includes('руб')) {
+    return `${(value / 1000).toLocaleString('ru-RU', {
+      maximumFractionDigits: 1,
+    })} млрд ₽`
+  }
+
+  return `${value.toLocaleString('ru-RU', { maximumFractionDigits: 0 })}${unit ? ` ${unit}` : ''}`
+}
+
+function formatPercent(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return '—'
+
+  return `${value >= 0 ? '+' : ''}${value.toLocaleString('ru-RU', {
+    maximumFractionDigits: 1,
+  })}%`
+}
+
+function formatPlainPercent(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return '—'
+
+  return `${value.toLocaleString('ru-RU', {
+    maximumFractionDigits: 1,
+  })}%`
 }
 
 function CapabilitiesAndMetrics() {
+  const [stats, setStats] = useState<HomeStats | null>(null)
+
+  useEffect(() => {
+    let ignore = false
+
+    fetch('/api/stats')
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        return res.json() as Promise<HomeStats>
+      })
+      .then((data) => {
+        if (!ignore) setStats(data)
+      })
+      .catch(() => {
+        if (!ignore) setStats(null)
+      })
+
+    return () => {
+      ignore = true
+    }
+  }, [])
+
   return (
     <section className="home-grid">
       <div className="glass-panel capabilities-metrics-panel">
@@ -229,8 +318,8 @@ function CapabilitiesAndMetrics() {
               </div>
               <div className="capability-title">Анализ динамики</div>
               <div className="capability-text">
-                Глубокий анализ временных рядов по 48 показателям: тренды, сезонность,
-                экстремумы и структурные разрывы.
+                Пространственный анализ и социально-экономический мониторинг региона:
+                динамика, различия территорий и ключевые точки изменения.
               </div>
             </div>
 
@@ -277,8 +366,8 @@ function CapabilitiesAndMetrics() {
               </div>
               <div className="capability-title">Поддержка решений</div>
               <div className="capability-text">
-                Система сценарного моделирования и экспорта отчётов для подготовки
-                управленческих документов и докладов.
+                Система сценарного моделирования для оценки вариантов развития и
+                подготовки обоснованных управленческих решений.
               </div>
             </div>
           </div>
@@ -293,30 +382,40 @@ function CapabilitiesAndMetrics() {
         <div className="metrics-grid">
           <div className="metric-item">
             <div className="metric-label">Показателей в системе</div>
-            <div className="metric-value">48</div>
+            <div className="metric-value">{stats?.indicator_count ?? '—'}</div>
             <div className="metric-caption">
-              экономика • инвестиции • демография • социальная сфера
+              целевые и факторные показатели, используемые моделями
             </div>
           </div>
           <div className="metric-item">
             <div className="metric-label">Горизонт прогноза</div>
-            <div className="metric-value">+4 года</div>
+            <div className="metric-value">
+              {stats?.forecast_horizon ? `+${stats.forecast_horizon} года` : '+4 года'}
+            </div>
             <div className="metric-caption">оценка, базовый и консервативный сценарии</div>
           </div>
           <div className="metric-item">
             <div className="metric-label">Частота обновления</div>
-            <div className="metric-value">ежемесячно</div>
-            <div className="metric-caption">автоматическая интеграция с API госорганов</div>
+            <div className="metric-value">год</div>
+            <div className="metric-caption">обновление после публикации годовой статистики</div>
           </div>
           <div className="metric-item">
-            <div className="metric-label">Модели и SHAP</div>
-            <div className="metric-value">3,1% MAPE</div>
-            <div className="metric-caption">высокая точность и интерпретируемость</div>
+            <div className="metric-label">Прогнозные показатели</div>
+            <div className="metric-value">{stats?.target_indicator_count ?? '—'}</div>
+            <div className="metric-caption">показатели с ролью target в прогнозных запусках</div>
           </div>
         </div>
       </aside>
     </section>
   )
+}
+
+interface HomeStats {
+  indicator_count: number
+  target_indicator_count: number
+  forecast_horizon: number
+  best_mape: number | null
+  model_count: number
 }
 
 function ProcessAndQuickActions() {
@@ -325,14 +424,14 @@ function ProcessAndQuickActions() {
       <div className="timeline-section glass-panel">
         <h2 className="home-section-title">Как это работает</h2>
         <p className="home-section-subtitle">
-          Пять шагов от сбора данных до готового отчёта для руководства региона.
+          Пять шагов от ручной загрузки данных до интерактивной визуализации прогноза.
         </p>
         <div className="timeline-row">
           <TimelineStep
             number={1}
             color="linear-gradient(145deg, #3b82f6, #06b6d4)"
             title="Сбор данных"
-            text="Автоматическая интеграция с API госорганов, исторические ряды, пространственные данные и ручная загрузка."
+            text="Пользователь вручную загружает исходные данные в систему для дальнейшей проверки и расчётов."
           />
           <TimelineStep
             number={2}
@@ -344,7 +443,7 @@ function ProcessAndQuickActions() {
             number={3}
             color="linear-gradient(145deg, #ec4899, #f97316)"
             title="Машинное обучение"
-            text="ARIMA, ансамблевые модели, RNN/LSTM и AutoML для выбора наилучшей архитектуры."
+            text="Оптимизация гиперпараметров ML-моделей и LSTM для выбора наиболее точной конфигурации."
           />
           <TimelineStep
             number={4}
@@ -355,8 +454,8 @@ function ProcessAndQuickActions() {
           <TimelineStep
             number={5}
             color="linear-gradient(145deg, #10b981, #06b6d4)"
-            title="Визуализация и отчёты"
-            text="Интерактивные дашборды, экспорт в PDF/Excel и готовые аналитические записки."
+            title="Визуализация"
+            text="Интерактивные дашборды показывают фактическую динамику, прогнозные сценарии и вклад факторов."
           />
         </div>
       </div>
@@ -365,32 +464,36 @@ function ProcessAndQuickActions() {
         <div style={{ gridColumn: '1 / -1', marginBottom: 4 }}>
           <h2 className="home-section-title">Быстрые действия</h2>
           <p className="home-section-subtitle">
-            Один клик до ключевых дашбордов и отчётов.
+            Один клик до ключевых разделов платформы.
           </p>
         </div>
         <QuickAction
+          to="/dashboards"
           color="linear-gradient(145deg, #22c55e, #16a34a)"
-          icon="💰"
-          title="Инвестиции"
-          subtitle="Перейти к дашборду по инвестициям"
+          icon="📊"
+          title="Дашборды"
+          subtitle="Панель мониторинга и визуализации"
         />
         <QuickAction
+          to="/forecasts"
           color="linear-gradient(145deg, #0ea5e9, #2563eb)"
-          icon="📉"
-          title="Дефлятор"
-          subtitle="Индексы-дефляторы и ценовые показатели"
+          icon="📈"
+          title="Прогнозы"
+          subtitle="Сводка по всем target-показателям"
         />
         <QuickAction
+          to="/indicators"
           color="linear-gradient(145deg, #a855f7, #ec4899)"
           icon="🧮"
-          title="Сценарное моделирование"
-          subtitle="What-if анализ и чувствительность"
+          title="Показатели"
+          subtitle="Сопоставление прогнозных и факторных данных"
         />
         <QuickAction
+          to="/data-upload"
           color="linear-gradient(145deg, #f97316, #facc15)"
-          icon="📄"
-          title="Экспорт отчёта"
-          subtitle="Сформировать PDF/Excel для совещания"
+          icon="📁"
+          title="Загрузка данных"
+          subtitle="Ручная загрузка исходных наборов"
         />
       </aside>
     </section>
@@ -418,15 +521,16 @@ function TimelineStep({ number, color, title, text }: TimelineStepProps) {
 }
 
 interface QuickActionProps {
+  to: string
   color: string
   icon: string
   title: string
   subtitle: string
 }
 
-function QuickAction({ color, icon, title, subtitle }: QuickActionProps) {
+function QuickAction({ to, color, icon, title, subtitle }: QuickActionProps) {
   return (
-    <button type="button" className="quick-action-button">
+    <Link to={to} className="quick-action-button">
       <div className="quick-action-icon" style={{ backgroundImage: color }}>
         {icon}
       </div>
@@ -434,144 +538,6 @@ function QuickAction({ color, icon, title, subtitle }: QuickActionProps) {
         <div className="quick-action-title">{title}</div>
         <div className="quick-action-subtitle">{subtitle}</div>
       </div>
-    </button>
-  )
-}
-
-function TechStackSection() {
-  return (
-    <section className="tech-stack glass-panel">
-      <h2 className="home-section-title">Технологический стек платформы</h2>
-      <p className="home-section-subtitle">
-        Современные инструменты для высокой точности прогнозов, масштабируемости и
-        интерпретируемости результатов.
-      </p>
-      <div className="tech-columns">
-        <div className="tech-column">
-          <div className="tech-column-title">Данные</div>
-          <div className="tech-pill">PostgreSQL</div>
-          <div className="tech-pill">MinIO</div>
-          <div className="tech-pill">Pandas</div>
-          <div className="tech-pill">NumPy</div>
-        </div>
-        <div className="tech-column">
-          <div className="tech-column-title">ML &amp; AI</div>
-          <div className="tech-pill">Scikit-learn</div>
-          <div className="tech-pill">PyTorch</div>
-          <div className="tech-pill">TensorFlow</div>
-          <div className="tech-pill">LAMA AutoML</div>
-          <div className="tech-pill">SHAP</div>
-        </div>
-        <div className="tech-column">
-          <div className="tech-column-title">Визуализация</div>
-          <div className="tech-pill">Plotly</div>
-          <div className="tech-pill">Matplotlib</div>
-          <div className="tech-pill">Seaborn</div>
-          <div className="tech-pill">Apache Superset</div>
-        </div>
-        <div className="tech-column">
-          <div className="tech-column-title">Backend</div>
-          <div className="tech-pill">Python</div>
-          <div className="tech-pill">FastAPI</div>
-          <div className="tech-pill">Flask</div>
-        </div>
-        <div className="tech-column">
-          <div className="tech-column-title">DevOps</div>
-          <div className="tech-pill">Docker</div>
-          <div className="tech-pill">Kubernetes</div>
-          <div className="tech-pill">Airflow</div>
-          <div className="tech-pill">Nginx</div>
-        </div>
-      </div>
-    </section>
-  )
-}
-
-const faqItems = [
-  {
-    id: 'q1',
-    question: 'Что такое SHAP и зачем он нужен?',
-    answer:
-      'SHAP показывает вклад каждого фактора в итоговое значение прогноза. Зелёные столбцы увеличивают прогноз, красные — уменьшают.',
-  },
-  {
-    id: 'q2',
-    question: 'Можно ли доверять прогнозам при резких изменениях экономики?',
-    answer:
-      'Платформа учитывает исторические шоки и использует ансамбли моделей, однако для экстремальных сценариев рекомендуется сценарный анализ.',
-  },
-  {
-    id: 'q3',
-    question: 'Как часто обновляются данные?',
-    answer:
-      'Основные показатели обновляются ежемесячно или ежеквартально, в зависимости от доступности данных источников.',
-  },
-  {
-    id: 'q4',
-    question: 'Можно ли выгружать результаты в отчёты?',
-    answer:
-      'Да, поддерживается экспорт в PDF и Excel, а также прямое включение графиков в презентации.',
-  },
-]
-
-function UpdatesAndFaq() {
-  const [openId, setOpenId] = useState<string | null>(faqItems[0]?.id ?? null)
-
-  return (
-    <section className="updates-faq">
-      <div className="updates-timeline glass-panel">
-        <h2 className="home-section-title">Обновления платформы</h2>
-        <p className="home-section-subtitle">
-          Лента релизов и улучшений для прозрачности развития системы.
-        </p>
-        <ul className="updates-list">
-          <li className="update-item">
-            <div className="update-dot green" />
-            <div className="update-card">
-              <div className="update-title">
-                Добавлен новый блок сценарного моделирования по инвестициям
-              </div>
-              <div className="update-time">сегодня</div>
-            </div>
-          </li>
-          <li className="update-item">
-            <div className="update-dot blue" />
-            <div className="update-card">
-              <div className="update-title">
-                Улучшена точность моделей по демографии и рынку труда
-              </div>
-              <div className="update-time">вчера</div>
-            </div>
-          </li>
-          <li className="update-item">
-            <div className="update-dot orange" />
-            <div className="update-card">
-              <div className="update-title">Исправлены аномальные значения в данных за 2020 год</div>
-              <div className="update-time">3 дня назад</div>
-            </div>
-          </li>
-        </ul>
-      </div>
-
-      <aside className="faq-panel glass-panel">
-        <h2 className="home-section-title">Частые вопросы</h2>
-        <p className="home-section-subtitle">
-          Краткие ответы по интерпретации прогнозов и работе с платформой.
-        </p>
-        {faqItems.map((item) => (
-          <div key={item.id} className="faq-item">
-            <button
-              type="button"
-              className="faq-header"
-              onClick={() => setOpenId((prev) => (prev === item.id ? null : item.id))}
-            >
-              <span>{item.question}</span>
-              <span>{openId === item.id ? '−' : '+'}</span>
-            </button>
-            {openId === item.id ? <div className="faq-answer">{item.answer}</div> : null}
-          </div>
-        ))}
-      </aside>
-    </section>
+    </Link>
   )
 }

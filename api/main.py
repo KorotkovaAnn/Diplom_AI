@@ -55,6 +55,7 @@ class ModelOut(BaseModel):
 
 
 class ForecastPoint(BaseModel):
+    indicator_id: int
     year: int
     scenario: str
     value: float
@@ -70,6 +71,7 @@ class ShapItem(BaseModel):
 
 class StatsOut(BaseModel):
     indicator_count: int
+    target_indicator_count: int
     forecast_horizon: int
     best_mape: Optional[float]
     model_count: int
@@ -90,6 +92,22 @@ def _fetch_best_model(conn) -> tuple[int, int] | tuple[None, None]:
         LIMIT 1
     """).fetchone()
     return (row[0], row[1]) if row else (None, None)
+
+
+def _fetch_model_target_indicator_id(conn, model_id: int) -> int:
+    """Возвращает target id_indicator для модели через связанный ForecastRun."""
+    row = conn.execute(
+        """
+        SELECT rr.id_indicator
+        FROM Model m
+        JOIN RunIndicatorRole rr ON rr.id_run = m.id_run AND rr.role = 'target'
+        WHERE m.id_model = ?
+        """,
+        (model_id,),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(404, f"Target-показатель для модели {model_id} не найден")
+    return row[0]
 
 
 def _indicator_names(indicator_ids: list[int]) -> dict[int, str]:
@@ -117,15 +135,43 @@ def _row_to_model(row) -> ModelOut:
 # ---------------------------------------------------------------------------
 
 @app.get("/api/indicators", response_model=list[IndicatorOut])
-def list_indicators():
-    """Все показатели с их сферой и единицей измерения."""
+def list_indicators(
+    role: Optional[str] = Query(None, description="target | feature; если не указан — все показатели"),
+):
+    """Показатели с их сферой и единицей измерения."""
+    indicator_ids: list[int] | None = None
+    if role is not None:
+        if role not in {"target", "feature"}:
+            raise HTTPException(400, "role должен быть target или feature")
+
+        with get_models_conn() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT id_indicator FROM RunIndicatorRole WHERE role = ?",
+                (role,),
+            ).fetchall()
+            indicator_ids = [r[0] for r in rows]
+
+        if not indicator_ids:
+            return []
+
     with get_indicators_conn() as conn:
-        rows = conn.execute("""
-            SELECT i.id_indicator, s.name, i.name, i.unit
-            FROM Indicator i
-            JOIN Sphere s ON i.id_sphere = s.id_sphere
-            ORDER BY i.id_sphere, i.id_indicator
-        """).fetchall()
+        params: list[int] = []
+        where_clause = ""
+        if indicator_ids is not None:
+            placeholders = ",".join("?" * len(indicator_ids))
+            where_clause = f"WHERE i.id_indicator IN ({placeholders})"
+            params = indicator_ids
+
+        rows = conn.execute(
+            f"""
+                SELECT i.id_indicator, s.name, i.name, i.unit
+                FROM Indicator i
+                JOIN Sphere s ON i.id_sphere = s.id_sphere
+                {where_clause}
+                ORDER BY i.id_sphere, i.id_indicator
+            """,
+            params,
+        ).fetchall()
     return [IndicatorOut(id=r[0], sphere=r[1], name=r[2], unit=r[3]) for r in rows]
 
 
@@ -178,6 +224,7 @@ def best_model():
 @app.get("/api/forecasts", response_model=list[ForecastPoint])
 def forecasts(
     model_id: Optional[int] = Query(None, description="id модели; если не указан — берётся лучшая"),
+    indicator_id: Optional[int] = Query(None, description="target id_indicator; если не указан — все target модели"),
     scenario: Optional[str] = Query(None, description="Базовый | Оптимистичный | Пессимистичный"),
 ):
     """Прогнозные значения. Без фильтров — все сценарии лучшей модели."""
@@ -189,7 +236,10 @@ def forecasts(
             model_id = mid
 
         params: list = [model_id]
-        sql = "SELECT year, scenario_name, forecast_value FROM ForecastResult WHERE id_model = ?"
+        sql = "SELECT id_indicator, year, scenario_name, forecast_value FROM ForecastResult WHERE id_model = ?"
+        if indicator_id is not None:
+            sql += " AND id_indicator = ?"
+            params.append(indicator_id)
         if scenario:
             sql += " AND scenario_name = ?"
             params.append(scenario)
@@ -197,20 +247,30 @@ def forecasts(
 
         rows = conn.execute(sql, params).fetchall()
 
-    return [ForecastPoint(year=r[0], scenario=r[1], value=r[2]) for r in rows]
+    return [ForecastPoint(indicator_id=r[0], year=r[1], scenario=r[2], value=r[3]) for r in rows]
 
 
 @app.get("/api/shap", response_model=list[ShapItem])
 def shap_contributions(
     model_id: int = Query(...),
+    indicator_id: Optional[int] = Query(None, description="target id_indicator; если не указан — target модели"),
     year: int = Query(...),
     scenario: str = Query(...),
 ):
     """SHAP-вклады факторов для конкретной модели, года и сценария."""
     with get_models_conn() as conn:
+        target_indicator_id = (
+            indicator_id
+            if indicator_id is not None
+            else _fetch_model_target_indicator_id(conn, model_id)
+        )
         result_row = conn.execute(
-            "SELECT id_result FROM ForecastResult WHERE id_model=? AND year=? AND scenario_name=?",
-            (model_id, year, scenario),
+            """
+            SELECT id_result
+            FROM ForecastResult
+            WHERE id_model=? AND id_indicator=? AND year=? AND scenario_name=?
+            """,
+            (model_id, target_indicator_id, year, scenario),
         ).fetchone()
         if not result_row:
             raise HTTPException(
@@ -239,6 +299,7 @@ def shap_contributions(
 @app.get("/api/dashboard")
 def dashboard(
     model_id: Optional[int] = Query(None, description="id модели; если не указан — лучшая по MAPE"),
+    indicator_id: Optional[int] = Query(None, description="target id_indicator; если не указан — target модели"),
     scenario: str = Query("Базовый", description="Базовый | Оптимистичный | Пессимистичный"),
 ):
     """
@@ -275,13 +336,15 @@ def dashboard(
             "SELECT id_indicator FROM RunIndicatorRole WHERE id_run=? AND role='target'",
             (id_run,),
         ).fetchone()
-        target_id = target_row[0] if target_row else None
+        target_id = indicator_id if indicator_id is not None else (target_row[0] if target_row else None)
 
         # Все прогнозы для модели
         forecast_rows = conn.execute(
             """SELECT year, scenario_name, forecast_value, id_result
-               FROM ForecastResult WHERE id_model=? ORDER BY scenario_name, year""",
-            (model_id,),
+               FROM ForecastResult
+               WHERE id_model=? AND id_indicator=?
+               ORDER BY scenario_name, year""",
+            (model_id, target_id),
         ).fetchall()
 
         # SHAP для каждого (год, сценарий)
@@ -350,9 +413,24 @@ def dashboard(
 def stats():
     """Сводная статистика для главной страницы."""
     with get_indicators_conn() as conn:
-        indicator_count = conn.execute("SELECT COUNT(*) FROM Indicator").fetchone()[0]
+        fallback_indicator_count = conn.execute("SELECT COUNT(*) FROM Indicator").fetchone()[0]
 
     with get_models_conn() as conn:
+        indicator_count_row = conn.execute("""
+            SELECT COUNT(DISTINCT id_indicator)
+            FROM RunIndicatorRole
+            WHERE role IN ('target', 'feature')
+        """).fetchone()
+        indicator_count = (
+            indicator_count_row[0]
+            if indicator_count_row and indicator_count_row[0]
+            else fallback_indicator_count
+        )
+        target_indicator_count = conn.execute("""
+            SELECT COUNT(DISTINCT id_indicator)
+            FROM RunIndicatorRole
+            WHERE role = 'target'
+        """).fetchone()[0]
         model_count = conn.execute(
             "SELECT COUNT(*) FROM Model WHERE status='trained'"
         ).fetchone()[0]
@@ -367,6 +445,7 @@ def stats():
 
     return StatsOut(
         indicator_count=indicator_count,
+        target_indicator_count=target_indicator_count,
         forecast_horizon=horizon,
         best_mape=best_mape,
         model_count=model_count,

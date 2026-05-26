@@ -209,6 +209,7 @@ class TestMetrics:
     def _make_model(self, models_conn) -> int:
         with patch_models(models_conn):
             id_run = db.save_run(4, 2000, 2023, "running")
+            db.save_run_indicator_roles(id_run, {1: "target", 2: "feature"})
             return db.save_model(id_run, "Ridge", "ml", "Ridge", "trained")
 
     def test_save_metrics_persists(self, models_conn):
@@ -247,6 +248,7 @@ class TestForecastResults:
     def _make_model(self, models_conn) -> int:
         with patch_models(models_conn):
             id_run = db.save_run(4, 2000, 2023, "running")
+            db.save_run_indicator_roles(id_run, {1: "target", 2: "feature"})
             return db.save_model(id_run, "Ridge", "ml", "Ridge", "trained")
 
     def test_returns_result_ids_mapping(self, models_conn):
@@ -273,10 +275,10 @@ class TestForecastResults:
 
         id_result = result_ids[(2024, "Базовый")]
         row = models_conn.execute(
-            "SELECT year, scenario_name, forecast_value FROM ForecastResult WHERE id_result=?",
+            "SELECT id_indicator, year, scenario_name, forecast_value FROM ForecastResult WHERE id_result=?",
             (id_result,),
         ).fetchone()
-        assert row == (2024, "Базовый", 350_000.0)
+        assert row == (1, 2024, "Базовый", 350_000.0)
 
 
 # ---------------------------------------------------------------------------
@@ -287,6 +289,7 @@ class TestShapContributions:
     def _make_result(self, models_conn) -> int:
         with patch_models(models_conn):
             id_run   = db.save_run(4, 2000, 2023, "running")
+            db.save_run_indicator_roles(id_run, {1: "target", 2: "feature"})
             id_model = db.save_model(id_run, "Ridge", "ml", "Ridge", "trained")
             result_ids = db.save_forecast_results(
                 id_model,

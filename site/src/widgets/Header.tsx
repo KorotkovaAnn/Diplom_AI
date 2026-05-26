@@ -2,15 +2,12 @@ import { NavLink, useNavigate } from 'react-router-dom'
 import { observer } from 'mobx-react-lite'
 import { Box, Button } from '@mui/material'
 
-import { NotificationCenter } from './NotificationCenter.tsx'
-
 const navItems: { to: string; label: string }[] = [
   { to: '/', label: 'Главная' },
   { to: '/dashboards', label: 'Дашборды' },
   { to: '/indicators', label: 'Показатели' },
   { to: '/forecasts', label: 'Прогнозы' },
-  { to: '/about', label: 'О проекте' },
-  { to: '/docs', label: 'Документация' },
+  { to: '/data-upload', label: 'Загрузка данных' },
 ]
 
 export const Header = observer(function Header() {
@@ -54,26 +51,8 @@ export const Header = observer(function Header() {
           </Box>
         </Box>
 
-        <Box className="app-header-right">
-          <NotificationCenter />
-
-          <Button
-            variant="outlined"
-            size="small"
-            sx={{
-              borderRadius: 999,
-              px: 2,
-              py: 0.75,
-              textTransform: 'none',
-              fontWeight: 600,
-              fontSize: 13,
-            }}
-          >
-            Войти
-          </Button>
-        </Box>
+        <Box className="app-header-right" />
       </Box>
     </Box>
   )
 })
-

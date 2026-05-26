@@ -78,6 +78,7 @@ CREATE TABLE ModelMetric (
 CREATE TABLE ForecastResult (
     id_result INTEGER PRIMARY KEY AUTOINCREMENT,
     id_model INTEGER NOT NULL,
+    id_indicator INTEGER NOT NULL,
     year INTEGER NOT NULL,
     scenario_name TEXT NOT NULL,
     forecast_value REAL NOT NULL,

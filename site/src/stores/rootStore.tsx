@@ -152,10 +152,11 @@ class IndicatorStore {
     makeAutoObservable(this, {}, { autoBind: true })
   }
 
-  async fetchIndicators() {
+  async fetchIndicators(role?: 'target' | 'feature') {
     this.isLoading = true
     try {
-      const res = await fetch('/api/indicators')
+      const query = role ? `?role=${role}` : ''
+      const res = await fetch(`/api/indicators${query}`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data: ApiIndicator[] = await res.json()
       runInAction(() => {
@@ -365,8 +366,8 @@ class DashboardStore {
     const forecasts = this.dashboardData.forecasts[this.scenarioApiName] ?? []
     if (!forecasts.length) return []
 
-    const firstYear = forecasts[0].year
-    const key = `${firstYear}_${this.scenarioApiName}`
+    const targetYear = forecasts[forecasts.length - 1].year
+    const key = `${targetYear}_${this.scenarioApiName}`
     const items = this.dashboardData.shap[key] ?? []
     if (!items.length) return []
 
@@ -377,7 +378,9 @@ class DashboardStore {
       name: item.indicator_name,
       contribution:
         totalAbs > 0
-          ? ((item.direction === 'positive' ? 1 : -1) * item.contribution) / totalAbs
+          ? (item.direction === 'negative'
+              ? -Math.abs(item.contribution)
+              : Math.abs(item.contribution)) / totalAbs
           : 0,
     }))
   }
