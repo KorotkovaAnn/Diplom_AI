@@ -30,12 +30,22 @@ export const DashboardsPage = observer(function DashboardsPage() {
   const kpis = dashboards.kpis
 
   const forecastCards = series.filter((p) => p.forecast != null)
-  const shapChartData = shap.slice(0, 5).map((factor) => ({
+  const positiveFactors = shap
+    .filter((factor) => factor.contribution > 0)
+    .sort(byAbsContributionDesc)
+    .slice(0, 3)
+  const negativeFactors = shap
+    .filter((factor) => factor.contribution < 0)
+    .sort(byAbsContributionDesc)
+    .slice(0, 3)
+  const shapInsightIds = new Set([...positiveFactors, ...negativeFactors].map((factor) => factor.id))
+  const shapChartData = shap
+    .filter((factor) => shapInsightIds.has(factor.id))
+    .sort(byAbsContributionDesc)
+    .map((factor) => ({
     ...factor,
     shortName: shortenFactorName(factor.name),
   }))
-  const positiveFactors = shap.filter((f) => f.contribution > 0).slice(0, 3)
-  const negativeFactors = shap.filter((f) => f.contribution < 0).slice(0, 3)
 
   return (
     <div>
@@ -476,8 +486,8 @@ export const DashboardsPage = observer(function DashboardsPage() {
                 </div>
               )}
               <p className="shap-caption">
-                Факторы отсортированы по абсолютной величине влияния — самые важные находятся
-                в верхней части диаграммы.
+                Диаграмма показывает те же факторы, что и блок ключевых инсайтов:
+                топ драйверов роста и факторов снижения.
               </p>
             </section>
           </section>
@@ -508,6 +518,13 @@ function modelOptionLabel(model: ApiModel): string {
 
 function modelCardCaption(model: ApiModel): string {
   return `${modelTypeLabel(model.type)} · ${model.name}`
+}
+
+function byAbsContributionDesc(
+  a: { contribution: number },
+  b: { contribution: number },
+): number {
+  return Math.abs(b.contribution) - Math.abs(a.contribution)
 }
 
 function shortenFactorName(name: string): string {

@@ -4,7 +4,9 @@ FastAPI-сервер: читает indicators.db и models.db, отдаёт JSON
 """
 
 import sys
+import base64
 from pathlib import Path
+from io import BytesIO
 from typing import Optional
 
 ROOT = Path(__file__).parent.parent
@@ -12,6 +14,10 @@ sys.path.insert(0, str(ROOT))
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
+from openpyxl.worksheet.datavalidation import DataValidation
 from pydantic import BaseModel
 
 from scripts.db import get_indicators_conn, get_models_conn
@@ -21,7 +27,7 @@ app = FastAPI(title="Investment Forecast API", version="1.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173"],
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["*"],
 )
 
@@ -450,3 +456,333 @@ def stats():
         best_mape=best_mape,
         model_count=model_count,
     )
+
+
+# ---------------------------------------------------------------------------
+# Загрузка данных — добавление / удаление значений за год
+# ---------------------------------------------------------------------------
+
+class DatasetYearInput(BaseModel):
+    target_id: int
+    year: int
+    values: dict[int, float]
+
+
+class DatasetTemplateUpload(BaseModel):
+    target_id: int
+    year: int
+    file_name: str | None = None
+    content_base64: str
+
+
+def _ensure_upload_table(conn) -> None:
+    """Создаёт таблицу DatasetUpload, если её ещё нет."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS DatasetUpload (
+            target_id    INTEGER NOT NULL,
+            year         INTEGER NOT NULL,
+            id_indicator INTEGER NOT NULL,
+            PRIMARY KEY (target_id, year, id_indicator)
+        )
+    """)
+
+
+def _dataset_form_rows(target_id: int) -> list[dict]:
+    with get_indicators_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT i.id_indicator, s.name AS sphere, i.name, i.unit
+            FROM Indicator i
+            JOIN Sphere s ON i.id_sphere = s.id_sphere
+            ORDER BY i.id_indicator
+            """,
+        ).fetchall()
+
+    if not rows:
+        raise HTTPException(404, "В indicators.db нет показателей")
+
+    return [
+        {
+            "id": r[0],
+            "sphere": r[1],
+            "name": r[2],
+            "unit": r[3],
+            "role": "target" if r[0] == target_id else "feature",
+        }
+        for r in rows
+    ]
+
+
+def _parse_template_number(raw) -> tuple[float | None, str | None]:
+    if raw is None or str(raw).strip() == "":
+        return None, "Значение обязательно"
+    if isinstance(raw, (int, float)):
+        return float(raw), None
+
+    normalized = str(raw).strip().replace(" ", "").replace(",", ".")
+    try:
+        return float(normalized), None
+    except ValueError:
+        return None, "Значение должно быть числом"
+
+
+@app.get("/api/dataset/next-year")
+def dataset_next_year():
+    """Следующий год для ввода = MAX(year) + 1 из Dataset."""
+    with get_indicators_conn() as conn:
+        row = conn.execute("SELECT MAX(year) FROM Dataset").fetchone()
+    max_year = row[0] if row and row[0] else 2023
+    return {"next_year": max_year + 1}
+
+
+@app.get("/api/dataset/form-indicators")
+def dataset_form_indicators(
+    target_id: int = Query(..., description="id target-показателя"),
+):
+    """Все показатели из indicators.db для формы загрузки.
+
+    Каждому показателю присваивается роль:
+    - target — выбранный целевой показатель
+    - feature — остальные показатели (все нужны для будущего переобучения)
+    """
+    return _dataset_form_rows(target_id)
+
+
+@app.get("/api/dataset/template")
+def dataset_template(
+    target_id: int = Query(..., description="id target-показателя"),
+    year: int = Query(..., description="Год для заполнения"),
+):
+    """Excel-шаблон для безопасного заполнения значений за год."""
+    indicators = _dataset_form_rows(target_id)
+    target_name = next((i["name"] for i in indicators if i["role"] == "target"), "")
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Загрузка данных"
+
+    ws["A1"] = "Шаблон загрузки данных"
+    ws["A1"].font = Font(bold=True, size=15, color="0F172A")
+    ws.merge_cells("A1:F1")
+    ws["A2"] = "Год"
+    ws["B2"] = year
+    ws["A3"] = "Target ID"
+    ws["B3"] = target_id
+    ws["C3"] = target_name
+    ws["A4"] = "Заполните только колонку F: Значение. Не меняйте ID показателей."
+    ws["A4"].font = Font(italic=True, color="64748B")
+    ws.merge_cells("A4:F4")
+
+    headers = ["ID", "Роль", "Сфера", "Показатель", "Ед. изм.", "Значение"]
+    ws.append([])
+    ws.append(headers)
+
+    header_fill = PatternFill("solid", fgColor="EAF2FF")
+    target_fill = PatternFill("solid", fgColor="DBEAFE")
+    feature_fill = PatternFill("solid", fgColor="F8FAFC")
+    thin_border = Border(bottom=Side(style="thin", color="CBD5E1"))
+
+    for cell in ws[6]:
+        cell.font = Font(bold=True, color="1E3A8A")
+        cell.fill = header_fill
+        cell.alignment = Alignment(vertical="center", wrap_text=True)
+        cell.border = thin_border
+
+    for indicator in indicators:
+        role_label = "Target" if indicator["role"] == "target" else "Feature"
+        ws.append([
+            indicator["id"],
+            role_label,
+            indicator["sphere"],
+            indicator["name"],
+            indicator["unit"],
+            None,
+        ])
+        row = ws.max_row
+        fill = target_fill if indicator["role"] == "target" else feature_fill
+        for cell in ws[row]:
+            cell.fill = fill
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+            cell.border = thin_border
+
+    ws.freeze_panes = "A7"
+    ws.column_dimensions["A"].width = 8
+    ws.column_dimensions["B"].width = 12
+    ws.column_dimensions["C"].width = 24
+    ws.column_dimensions["D"].width = 54
+    ws.column_dimensions["E"].width = 24
+    ws.column_dimensions["F"].width = 18
+    ws.auto_filter.ref = f"A6:F{ws.max_row}"
+
+    value_validation = DataValidation(
+        type="decimal",
+        operator="between",
+        formula1="-999999999999",
+        formula2="999999999999",
+        allow_blank=False,
+    )
+    value_validation.error = "Введите числовое значение"
+    value_validation.errorTitle = "Некорректное значение"
+    ws.add_data_validation(value_validation)
+    value_validation.add(f"F7:F{ws.max_row}")
+
+    buffer = BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+
+    filename = f"dataset_template_target_{target_id}_{year}.xlsx"
+    return StreamingResponse(
+        buffer,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/api/dataset/template/parse")
+def parse_dataset_template(data: DatasetTemplateUpload):
+    """Читает заполненный Excel-шаблон и возвращает значения для формы."""
+    try:
+        file_bytes = base64.b64decode(data.content_base64)
+    except Exception:
+        raise HTTPException(400, "Не удалось прочитать файл")
+
+    try:
+        wb = load_workbook(BytesIO(file_bytes), data_only=True, read_only=True)
+    except Exception:
+        raise HTTPException(400, "Файл должен быть корректным .xlsx-шаблоном")
+
+    if "Загрузка данных" not in wb.sheetnames:
+        raise HTTPException(400, "В файле не найден лист «Загрузка данных»")
+
+    ws = wb["Загрузка данных"]
+    template_year = ws["B2"].value
+    template_target_id = ws["B3"].value
+
+    if int(template_year or 0) != data.year:
+        raise HTTPException(400, f"Шаблон рассчитан на {template_year} год, выбран {data.year}")
+    if int(template_target_id or 0) != data.target_id:
+        raise HTTPException(400, "Target-показатель в шаблоне не совпадает с выбранным")
+
+    expected_rows = _dataset_form_rows(data.target_id)
+    expected_ids = {row["id"] for row in expected_rows}
+    values: dict[int, float] = {}
+    row_errors: list[dict] = []
+
+    for row_number in range(7, ws.max_row + 1):
+        indicator_id = ws.cell(row=row_number, column=1).value
+        if indicator_id is None:
+            continue
+
+        try:
+            indicator_id = int(indicator_id)
+        except (TypeError, ValueError):
+            row_errors.append({"row": row_number, "indicator_id": None, "message": "Некорректный ID показателя"})
+            continue
+
+        if indicator_id not in expected_ids:
+            row_errors.append({"row": row_number, "indicator_id": indicator_id, "message": "Лишний показатель в шаблоне"})
+            continue
+
+        value, error = _parse_template_number(ws.cell(row=row_number, column=6).value)
+        if error:
+            row_errors.append({"row": row_number, "indicator_id": indicator_id, "message": error})
+        else:
+            values[indicator_id] = value
+
+    missing_ids = expected_ids - set(values.keys())
+    for missing_id in sorted(missing_ids):
+        row_errors.append({"row": None, "indicator_id": missing_id, "message": "Показатель не заполнен"})
+
+    return {
+        "status": "ok" if not row_errors else "error",
+        "year": data.year,
+        "target_id": data.target_id,
+        "values": values,
+        "count": len(values),
+        "errors": row_errors,
+    }
+
+
+@app.post("/api/dataset/year")
+def save_dataset_year(data: DatasetYearInput):
+    """Сохраняет значения показателей за год в indicators.db.
+
+    Регистрирует связь (target_id, year, id_indicator) в DatasetUpload,
+    чтобы при удалении знать какие показатели относятся к какому target.
+    """
+    if not data.values:
+        raise HTTPException(400, "Не переданы значения показателей")
+
+    with get_indicators_conn() as conn:
+        _ensure_upload_table(conn)
+
+        existing = conn.execute(
+            "SELECT id_indicator FROM Dataset WHERE year = ?", (data.year,)
+        ).fetchall()
+        existing_ids = {r[0] for r in existing}
+
+        for ind_id, value in data.values.items():
+            if ind_id in existing_ids:
+                conn.execute(
+                    "UPDATE Dataset SET value = ? WHERE id_indicator = ? AND year = ?",
+                    (value, ind_id, data.year),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO Dataset (id_indicator, year, value) VALUES (?, ?, ?)",
+                    (ind_id, data.year, value),
+                )
+
+            conn.execute(
+                "INSERT OR IGNORE INTO DatasetUpload (target_id, year, id_indicator) VALUES (?, ?, ?)",
+                (data.target_id, data.year, ind_id),
+            )
+
+        conn.commit()
+
+    return {"status": "ok", "year": data.year, "count": len(data.values)}
+
+
+@app.delete("/api/dataset/year")
+def delete_dataset_year(
+    year: int = Query(..., description="Год для удаления"),
+    target_id: int = Query(..., description="id target-показателя"),
+):
+    """Удаляет данные за год, привязанные к конкретному target.
+
+    Из DatasetUpload берём список показателей, заполненных для этого target.
+    Показатель удаляется из Dataset только если он не используется другим target
+    за тот же год.
+    """
+    with get_indicators_conn() as conn:
+        _ensure_upload_table(conn)
+
+        owned_rows = conn.execute(
+            "SELECT id_indicator FROM DatasetUpload WHERE target_id = ? AND year = ?",
+            (target_id, year),
+        ).fetchall()
+        owned_ids = [r[0] for r in owned_rows]
+
+        if not owned_ids:
+            raise HTTPException(404, f"Нет данных для target_id={target_id} за {year} год")
+
+        deleted = 0
+        for ind_id in owned_ids:
+            other = conn.execute(
+                "SELECT 1 FROM DatasetUpload WHERE year = ? AND id_indicator = ? AND target_id != ? LIMIT 1",
+                (year, ind_id, target_id),
+            ).fetchone()
+            if other is None:
+                conn.execute(
+                    "DELETE FROM Dataset WHERE id_indicator = ? AND year = ?",
+                    (ind_id, year),
+                )
+                deleted += 1
+
+        conn.execute(
+            "DELETE FROM DatasetUpload WHERE target_id = ? AND year = ?",
+            (target_id, year),
+        )
+        conn.commit()
+
+    return {"status": "ok", "year": year, "target_id": target_id, "deleted_count": deleted}
