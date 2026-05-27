@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { observer } from 'mobx-react-lite'
 import { useRootStore, type ApiModel, type IndicatorCategory } from '../stores/rootStore.tsx'
 
@@ -89,6 +89,10 @@ export const ForecastsPage = observer(function ForecastsPage() {
     )
   }, [indicators.indicators, selectedCategory])
 
+  const selectedModel = useMemo(() => {
+    return models.find((model) => String(model.id) === selectedModelId) ?? null
+  }, [models, selectedModelId])
+
   const tableColumns = useMemo<ForecastTableColumn[]>(() => {
     const columns = new Map<number, ForecastTableColumn>()
 
@@ -147,7 +151,9 @@ export const ForecastsPage = observer(function ForecastsPage() {
     })
   }, [forecastPoints, historyByIndicatorId, targetIndicators])
 
-  async function handleRenderTable() {
+  const handleRenderTable = useCallback(async () => {
+    if (targetIndicators.length === 0 || models.length === 0) return
+
     setIsForecastsLoading(true)
     setError(null)
     try {
@@ -169,6 +175,33 @@ export const ForecastsPage = observer(function ForecastsPage() {
     } finally {
       setIsForecastsLoading(false)
     }
+  }, [models.length, selectedModelId, targetIndicators])
+
+  useEffect(() => {
+    if (
+      selectedModelId &&
+      targetIndicators.length > 0 &&
+      models.length > 0 &&
+      !indicators.isLoading &&
+      !isModelsLoading
+    ) {
+      void handleRenderTable()
+    }
+  }, [
+    handleRenderTable,
+    indicators.isLoading,
+    isModelsLoading,
+    models.length,
+    selectedModelId,
+    targetIndicators.length,
+  ])
+
+  function handleExportExcel() {
+    exportForecastTable({
+      rows: tableRows,
+      columns: tableColumns,
+      modelLabel: selectedModel ? modelOptionLabel(selectedModel) : '-',
+    })
   }
 
   return (
@@ -189,7 +222,6 @@ export const ForecastsPage = observer(function ForecastsPage() {
               value={selectedCategory}
               onChange={(event) => {
                 setSelectedCategory(event.target.value as IndicatorCategory)
-                setIsTableVisible(false)
               }}
               disabled={indicators.isLoading || targetCategories.length === 0}
             >
@@ -214,7 +246,6 @@ export const ForecastsPage = observer(function ForecastsPage() {
               value={selectedModelId}
               onChange={(event) => {
                 setSelectedModelId(event.target.value)
-                setIsTableVisible(false)
               }}
               disabled={isModelsLoading || models.length === 0}
             >
@@ -234,7 +265,7 @@ export const ForecastsPage = observer(function ForecastsPage() {
 
           <button
             type="button"
-            className="btn btn-primary btn-small forecast-render-button"
+            className="btn btn-outline btn-small forecast-render-button"
             onClick={handleRenderTable}
             disabled={
               isForecastsLoading ||
@@ -244,19 +275,49 @@ export const ForecastsPage = observer(function ForecastsPage() {
               models.length === 0
             }
           >
-            {isForecastsLoading ? 'Загрузка...' : 'Отрисовать'}
+            {isForecastsLoading ? 'Обновление...' : 'Обновить'}
           </button>
         </div>
       </section>
 
+      <section className="forecast-summary-grid">
+        <ForecastSummaryCard
+          label="Модель"
+          value={selectedModel ? modelTypeLabel(selectedModel.type) : '-'}
+          caption={selectedModel?.name ?? 'Нет выбранной модели'}
+        />
+        <ForecastSummaryCard
+          label="MAPE"
+          value={selectedModel?.mape != null ? `${(selectedModel.mape * 100).toFixed(1)}%` : '-'}
+          caption={selectedModel?.algorithm ?? 'Метрика качества'}
+          accent={selectedModel?.mape != null ? 'positive' : undefined}
+        />
+        <ForecastSummaryCard
+          label="Горизонт"
+          value={forecastHorizonLabel(tableColumns)}
+          caption={isForecastsLoading ? 'Обновляем таблицу' : `${tableRows.length} строк прогноза`}
+        />
+      </section>
+
       {isTableVisible && (
-        <section className="glass-panel" style={{ padding: '0 0 8px' }}>
+        <section className="glass-panel forecast-table-panel">
+          <div className="forecast-table-actions">
+            <span>{isForecastsLoading ? 'Обновление данных...' : 'Данные обновляются автоматически'}</span>
+            <button
+              type="button"
+              className="btn btn-outline btn-small"
+              onClick={handleExportExcel}
+              disabled={tableRows.length === 0}
+            >
+              Экспорт в Excel
+            </button>
+          </div>
           <div className="forecast-table-wrapper">
             <table className="forecast-table">
               <thead>
                 <tr>
-                  <th>Категория</th>
-                  <th>Показатель</th>
+                  <th className="forecast-sticky-col forecast-category-col">Категория</th>
+                  <th className="forecast-sticky-col forecast-name-col">Показатель</th>
                   <th>Модель</th>
                   <th>Сценарий</th>
                   {tableColumns.map((column) => (
@@ -267,13 +328,17 @@ export const ForecastsPage = observer(function ForecastsPage() {
               <tbody>
                 {tableRows.map((row) => (
                   <tr key={row.id}>
-                    <td>{row.categoryLabel}</td>
-                    <td>
+                    <td className="forecast-sticky-col forecast-category-col">{row.categoryLabel}</td>
+                    <td className="forecast-sticky-col forecast-name-col">
                       <div className="forecast-name">{row.indicatorName}</div>
                       <div className="forecast-unit">{row.unit}</div>
                     </td>
-                    <td>{selectedModelLabel(models, selectedModelId)}</td>
-                    <td>{row.scenario}</td>
+                    <td>{selectedModel ? modelOptionLabel(selectedModel) : '-'}</td>
+                    <td>
+                      <span className={`scenario-badge ${scenarioClass(row.scenario)}`}>
+                        {row.scenario}
+                      </span>
+                    </td>
                     {tableColumns.map((column, index) => (
                       <ForecastValueCell
                         key={column.year}
@@ -381,12 +446,100 @@ function scenarioRank(scenario: string): number {
   return index === -1 ? SCENARIO_ORDER.length : index
 }
 
-function modelOptionLabel(model: ApiModel): string {
-  const mape = model.mape != null ? `, MAPE ${(model.mape * 100).toFixed(1)}%` : ''
-  return `${model.type.toUpperCase()} · ${model.name} · ${model.algorithm}${mape}`
+function modelTypeLabel(type: string): string {
+  if (type === 'machine_learning' || type === 'ml') return 'ML'
+  if (type === 'neural_network' || type === 'lstm') return 'LSTM'
+  return type.toUpperCase()
 }
 
-function selectedModelLabel(models: ApiModel[], selectedModelId: string): string {
-  const model = models.find((item) => String(item.id) === selectedModelId)
-  return model ? modelOptionLabel(model) : '-'
+function modelOptionLabel(model: ApiModel): string {
+  const mape = model.mape != null ? `, MAPE ${(model.mape * 100).toFixed(1)}%` : ''
+  return `${modelTypeLabel(model.type)} · ${model.name} · ${model.algorithm}${mape}`
+}
+
+function scenarioClass(scenario: string): string {
+  if (scenario === 'Базовый') return 'base'
+  if (scenario === 'Консервативный') return 'conservative'
+  if (scenario === 'Оценка') return 'estimate'
+  return 'neutral'
+}
+
+function forecastHorizonLabel(columns: ForecastTableColumn[]): string {
+  const forecastYears = columns.filter((column) => !column.label.includes('факт')).length
+  if (forecastYears === 0) return '-'
+  return `${forecastYears} года`
+}
+
+function ForecastSummaryCard({
+  label,
+  value,
+  caption,
+  accent,
+}: {
+  label: string
+  value: string
+  caption: string
+  accent?: 'positive'
+}) {
+  return (
+    <div className="forecast-summary-card glass-panel">
+      <div className="dashboard-kpi-label">{label}</div>
+      <div className={`forecast-summary-value${accent ? ` ${accent}` : ''}`}>{value}</div>
+      <div className="dashboard-kpi-caption">{caption}</div>
+    </div>
+  )
+}
+
+function exportForecastTable({
+  rows,
+  columns,
+  modelLabel,
+}: {
+  rows: ForecastTableRow[]
+  columns: ForecastTableColumn[]
+  modelLabel: string
+}) {
+  const header = ['Категория', 'Показатель', 'Модель', 'Сценарий', ...columns.map((column) => column.label)]
+  const tableRows = rows.map((row) => [
+    row.categoryLabel,
+    row.indicatorName,
+    modelLabel,
+    row.scenario,
+    ...columns.map((column) => formatValue(row.valuesByYear.get(column.year))),
+  ])
+
+  const html = `
+    <html>
+      <head><meta charset="UTF-8" /></head>
+      <body>
+        <table border="1">
+          <thead><tr>${header.map((cell) => `<th>${escapeHtml(cell)}</th>`).join('')}</tr></thead>
+          <tbody>
+            ${tableRows
+              .map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join('')}</tr>`)
+              .join('')}
+          </tbody>
+        </table>
+      </body>
+    </html>
+  `
+
+  const blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = 'forecast-summary.xls'
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;')
 }

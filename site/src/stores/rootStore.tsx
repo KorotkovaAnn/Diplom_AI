@@ -268,6 +268,9 @@ class DashboardStore {
       if (modelId != null) {
         params.set('model_id', String(modelId))
       }
+      if (this.selectedIndicatorId) {
+        params.set('indicator_id', this.selectedIndicatorId)
+      }
       const query = params.toString()
       const res = await fetch(query ? `/api/dashboard?${query}` : '/api/dashboard')
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -290,6 +293,7 @@ class DashboardStore {
 
   setSelectedIndicator(id: string) {
     this.selectedIndicatorId = id
+    void this.fetchDashboard(this.selectedModelId)
   }
 
   setSelectedModel(id: string) {

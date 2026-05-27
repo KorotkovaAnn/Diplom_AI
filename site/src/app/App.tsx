@@ -3,7 +3,6 @@ import { MainLayout } from '../layouts/MainLayout'
 import { HomePage } from '../pages/HomePage'
 import { DashboardsPage } from '../pages/DashboardsPage'
 import { ForecastsPage } from '../pages/ForecastsPage'
-import { ScenarioModelingPage } from '../pages/ScenarioModelingPage'
 import { IndicatorsPage } from '../pages/IndicatorsPage'
 import { DataUploadPage } from '../pages/DataUploadPage'
 
@@ -16,7 +15,6 @@ export function App() {
           <Route path="/dashboards" element={<DashboardsPage />} />
           <Route path="/indicators" element={<IndicatorsPage />} />
           <Route path="/forecasts" element={<ForecastsPage />} />
-          <Route path="/scenarios" element={<ScenarioModelingPage />} />
           <Route path="/data-upload" element={<DataUploadPage />} />
         </Routes>
       </MainLayout>

@@ -1,9 +1,10 @@
-import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { type ChangeEvent, type SyntheticEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ClearIcon from '@mui/icons-material/Clear'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
 import DownloadIcon from '@mui/icons-material/Download'
 import SaveIcon from '@mui/icons-material/Save'
 import UploadFileIcon from '@mui/icons-material/UploadFile'
+import { Alert, Snackbar } from '@mui/material'
 
 interface ApiIndicator {
   id: number
@@ -48,11 +49,13 @@ export function DataUploadPage() {
   const [isTemplateLoading, setIsTemplateLoading] = useState(false)
   const [isTemplateParsing, setIsTemplateParsing] = useState(false)
   const [submitMessage, setSubmitMessage] = useState<UserMessage | null>(null)
+  const [submitToast, setSubmitToast] = useState<UserMessage | null>(null)
   const [templateMessage, setTemplateMessage] = useState<UserMessage | null>(null)
 
   const [deleteYear, setDeleteYear] = useState('')
   const [isDeleting, setIsDeleting] = useState(false)
   const [deleteMessage, setDeleteMessage] = useState<UserMessage | null>(null)
+  const [deleteToast, setDeleteToast] = useState<UserMessage | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const fetchFormIndicators = useCallback(async (targetId: string) => {
@@ -266,6 +269,7 @@ export function DataUploadPage() {
 
     setIsSaving(true)
     setSubmitMessage(null)
+    setSubmitToast(null)
     try {
       const payload: Record<number, number> = {}
       formIndicators.forEach((indicator) => {
@@ -284,9 +288,9 @@ export function DataUploadPage() {
       }
 
       const result: { year: number; count: number } = await res.json()
-      setSubmitMessage({
+      setSubmitToast({
         type: 'success',
-        text: `Данные за ${result.year} год сохранены (${result.count} показателей)`,
+        text: `База данных заполнена: данные за ${result.year} год сохранены (${result.count} показателей).`,
       })
       setValues(buildEmptyValues(formIndicators))
       setErrors({})
@@ -299,6 +303,14 @@ export function DataUploadPage() {
     } finally {
       setIsSaving(false)
     }
+  }
+
+  function handleSubmitToastClose(
+    _event?: SyntheticEvent | Event,
+    reason?: string,
+  ) {
+    if (reason === 'clickaway') return
+    setSubmitToast(null)
   }
 
   async function handleDelete() {
@@ -314,6 +326,7 @@ export function DataUploadPage() {
 
     setIsDeleting(true)
     setDeleteMessage(null)
+    setDeleteToast(null)
     try {
       const res = await fetch(
         `/api/dataset/year?year=${yearNumber}&target_id=${selectedTargetId}`,
@@ -324,7 +337,7 @@ export function DataUploadPage() {
         throw new Error(error.detail || 'Ошибка удаления')
       }
       const result: { deleted_count: number; year: number } = await res.json()
-      setDeleteMessage({
+      setDeleteToast({
         type: 'success',
         text: `Удалено ${result.deleted_count} записей за ${result.year} год`,
       })
@@ -337,6 +350,14 @@ export function DataUploadPage() {
     } finally {
       setIsDeleting(false)
     }
+  }
+
+  function handleDeleteToastClose(
+    _event?: SyntheticEvent | Event,
+    reason?: string,
+  ) {
+    if (reason === 'clickaway') return
+    setDeleteToast(null)
   }
 
   const selectedTarget = useMemo(() => {
@@ -361,6 +382,40 @@ export function DataUploadPage() {
 
   return (
     <div>
+      <Snackbar
+        open={Boolean(submitToast)}
+        autoHideDuration={4500}
+        onClose={handleSubmitToastClose}
+        anchorOrigin={{ vertical: 'top', horizontal: 'right' }}
+        className="data-upload-toast"
+      >
+        <Alert
+          severity="success"
+          onClose={handleSubmitToastClose}
+          className="data-upload-toast-alert"
+          sx={{ width: '100%' }}
+        >
+          {submitToast?.text}
+        </Alert>
+      </Snackbar>
+
+      <Snackbar
+        open={Boolean(deleteToast)}
+        autoHideDuration={4500}
+        onClose={handleDeleteToastClose}
+        anchorOrigin={{ vertical: 'top', horizontal: 'right' }}
+        className="data-upload-toast"
+      >
+        <Alert
+          severity="success"
+          onClose={handleDeleteToastClose}
+          className="data-upload-toast-alert"
+          sx={{ width: '100%' }}
+        >
+          {deleteToast?.text}
+        </Alert>
+      </Snackbar>
+
       <h1 className="page-title">Загрузка данных</h1>
       <p className="page-subtitle">
         Добавление фактических значений показателей за новый год в базу данных.

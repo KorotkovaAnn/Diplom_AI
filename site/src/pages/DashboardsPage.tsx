@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { observer } from 'mobx-react-lite'
 import {
   Area,
@@ -19,6 +19,7 @@ import { useRootStore, type ApiModel, type TimeSeriesPoint } from '../stores/roo
 
 export const DashboardsPage = observer(function DashboardsPage() {
   const { dashboards, indicators } = useRootStore()
+  const [shapMode, setShapMode] = useState<'top' | 'all'>('top')
 
   useEffect(() => {
     dashboards.initializeDashboard()
@@ -30,6 +31,12 @@ export const DashboardsPage = observer(function DashboardsPage() {
   const kpis = dashboards.kpis
 
   const forecastCards = series.filter((p) => p.forecast != null)
+  const shapTargetYear = forecastCards[forecastCards.length - 1]?.year
+  const shapContext = [
+    shapTargetYear ? `${shapTargetYear} год` : null,
+    dashboards.scenarioApiName,
+    dashboards.modelInfo ? modelCardCaption(dashboards.modelInfo) : null,
+  ].filter(Boolean).join(' · ')
   const positiveFactors = shap
     .filter((factor) => factor.contribution > 0)
     .sort(byAbsContributionDesc)
@@ -39,13 +46,19 @@ export const DashboardsPage = observer(function DashboardsPage() {
     .sort(byAbsContributionDesc)
     .slice(0, 3)
   const shapInsightIds = new Set([...positiveFactors, ...negativeFactors].map((factor) => factor.id))
-  const shapChartData = shap
-    .filter((factor) => shapInsightIds.has(factor.id))
+  const shapChartData = (shapMode === 'top'
+    ? shap.filter((factor) => shapInsightIds.has(factor.id))
+    : shap.slice()
+  )
     .sort(byAbsContributionDesc)
     .map((factor) => ({
-    ...factor,
-    shortName: shortenFactorName(factor.name),
-  }))
+      ...factor,
+      shortName: shortenFactorName(factor.name),
+    }))
+  const shapAxis = useMemo(() => buildShapAxis(shapChartData), [shapChartData])
+  const shapChartHeight = shapMode === 'all'
+    ? Math.max(360, shapChartData.length * 52)
+    : 360
 
   return (
     <div>
@@ -184,7 +197,12 @@ export const DashboardsPage = observer(function DashboardsPage() {
 
                   return (
                     <div key={p.year} className="forecast-card">
-                      <div className="forecast-card-year">{p.year}</div>
+                      <div className="forecast-card-topline">
+                        <div className="forecast-card-year">{p.year}</div>
+                        <span className={`scenario-badge ${scenarioClass(dashboards.scenarioApiName)}`}>
+                          {dashboards.scenarioApiName}
+                        </span>
+                      </div>
                       <div className="forecast-card-value">
                         {p.forecast?.toLocaleString('ru-RU', { maximumFractionDigits: 0 })}
                       </div>
@@ -416,13 +434,32 @@ export const DashboardsPage = observer(function DashboardsPage() {
             </aside>
 
             <section className="shap-panel glass-panel">
-              <h2 className="home-section-title">SHAP-анализ вклада факторов</h2>
+              <div className="shap-panel-head">
+                <div>
+                  <h2 className="home-section-title">SHAP-анализ вклада факторов</h2>
+                  <div className="shap-context-line">
+                    {shapContext ? `SHAP для ${shapContext}` : 'Контекст SHAP будет доступен после загрузки данных'}
+                  </div>
+                </div>
+                <div className="dashboard-segmented">
+                  {(['top', 'all'] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      className={segmentClass(shapMode === mode)}
+                      onClick={() => setShapMode(mode)}
+                    >
+                      {mode === 'top' ? 'Топ факторов' : 'Все факторы'}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <p className="home-section-subtitle">
                 Положительный вклад (зелёный) увеличивает прогнозируемое значение,
                 отрицательный (красный) — снижает. Значения нормированы по сумме вкладов.
               </p>
               {shap.length > 0 ? (
-                <div className="shap-chart-wrapper">
+                <div className="shap-chart-wrapper" style={{ height: shapChartHeight }}>
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart
                       data={shapChartData}
@@ -443,8 +480,8 @@ export const DashboardsPage = observer(function DashboardsPage() {
                       <CartesianGrid horizontal={false} stroke="#e5e7eb" strokeDasharray="3 3" />
                       <XAxis
                         type="number"
-                        domain={[-0.3, 0.7]}
-                        ticks={[-0.2, 0, 0.2, 0.4, 0.6]}
+                        domain={shapAxis.domain}
+                        ticks={shapAxis.ticks}
                         tickFormatter={(v: number) => `${(v * 100).toFixed(0)}%`}
                       />
                       <YAxis
@@ -486,8 +523,9 @@ export const DashboardsPage = observer(function DashboardsPage() {
                 </div>
               )}
               <p className="shap-caption">
-                Диаграмма показывает те же факторы, что и блок ключевых инсайтов:
-                топ драйверов роста и факторов снижения.
+                {shapMode === 'top'
+                  ? 'Диаграмма показывает те же факторы, что и блок ключевых инсайтов.'
+                  : 'Диаграмма показывает все SHAP-факторы выбранного прогноза.'}
               </p>
             </section>
           </section>
@@ -506,8 +544,8 @@ function segmentClass(active: boolean): string {
 }
 
 function modelTypeLabel(type: string): string {
-  if (type === 'machine_learning') return 'ML'
-  if (type === 'neural_network') return 'LSTM'
+  if (type === 'machine_learning' || type === 'ml') return 'ML'
+  if (type === 'neural_network' || type === 'lstm') return 'LSTM'
   return type
 }
 
@@ -520,11 +558,32 @@ function modelCardCaption(model: ApiModel): string {
   return `${modelTypeLabel(model.type)} · ${model.name}`
 }
 
+function scenarioClass(scenario: string): string {
+  if (scenario === 'Базовый') return 'base'
+  if (scenario === 'Консервативный') return 'conservative'
+  if (scenario === 'Оценка') return 'estimate'
+  return 'neutral'
+}
+
 function byAbsContributionDesc(
   a: { contribution: number },
   b: { contribution: number },
 ): number {
   return Math.abs(b.contribution) - Math.abs(a.contribution)
+}
+
+function buildShapAxis(data: { contribution: number }[]): {
+  domain: [number, number]
+  ticks: number[]
+} {
+  const maxAbs = Math.max(0.1, ...data.map((item) => Math.abs(item.contribution)))
+  const step = maxAbs <= 0.25 ? 0.1 : maxAbs <= 0.5 ? 0.2 : 0.25
+  const limit = Math.ceil((maxAbs + step * 0.35) / step) * step
+  const ticks: number[] = []
+  for (let value = -limit; value <= limit + 0.0001; value += step) {
+    ticks.push(Number(value.toFixed(2)))
+  }
+  return { domain: [-limit, limit], ticks }
 }
 
 function shortenFactorName(name: string): string {

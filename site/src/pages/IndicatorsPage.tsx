@@ -1,8 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
+  Bar,
+  BarChart,
   CartesianGrid,
+  Cell,
   Line,
   LineChart,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -42,6 +46,7 @@ export function IndicatorsPage() {
   const [isTableVisible, setIsTableVisible] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [chartFeatureId, setChartFeatureId] = useState('')
+  const [chartSphere, setChartSphere] = useState('all')
   const [chartTimeRange, setChartTimeRange] = useState<'all' | 'last10' | 'last5'>('all')
   const [chartHistory, setChartHistory] = useState<HistoryPoint[]>([])
   const [isChartLoading, setIsChartLoading] = useState(false)
@@ -51,11 +56,30 @@ export function IndicatorsPage() {
     void fetchIndicatorOptions()
   }, [])
 
+  const featureSpheres = useMemo(() => {
+    return Array.from(new Set(featureIndicators.map((indicator) => indicator.sphere))).sort((a, b) =>
+      a.localeCompare(b, 'ru'),
+    )
+  }, [featureIndicators])
+
+  const filteredFeatureIndicators = useMemo(() => {
+    return chartSphere === 'all'
+      ? featureIndicators
+      : featureIndicators.filter((indicator) => indicator.sphere === chartSphere)
+  }, [chartSphere, featureIndicators])
+
   useEffect(() => {
-    if (featureIndicators.length > 0 && !chartFeatureId) {
-      setChartFeatureId(String(featureIndicators[0].id))
+    if (filteredFeatureIndicators.length === 0) {
+      setChartFeatureId('')
+      return
     }
-  }, [featureIndicators, chartFeatureId])
+    const currentStillVisible = filteredFeatureIndicators.some(
+      (indicator) => String(indicator.id) === chartFeatureId,
+    )
+    if (!chartFeatureId || !currentStillVisible) {
+      setChartFeatureId(String(filteredFeatureIndicators[0].id))
+    }
+  }, [chartFeatureId, filteredFeatureIndicators])
 
   useEffect(() => {
     if (!chartFeatureId) return
@@ -142,6 +166,11 @@ export function IndicatorsPage() {
   }, [chartHistory, chartTimeRange])
 
   const chartStats = useMemo(() => computeTimeSeriesStats(filteredChartData), [filteredChartData])
+  const yoyChartData = useMemo(() => buildYoyChartData(filteredChartData), [filteredChartData])
+
+  const completenessStats = useMemo(() => {
+    return computeCompletenessStats(tableRows)
+  }, [tableRows])
 
   async function handleRenderTable() {
     if (!selectedTarget) return
@@ -210,55 +239,77 @@ export function IndicatorsPage() {
       </section>
 
       {isTableVisible && (
-        <section className="glass-panel indicators-table-panel">
-          <div className="indicators-history-table-wrapper">
-            <table className="forecast-table indicators-history-table">
-              <thead>
-                <tr>
-                  <th>Тип</th>
-                  <th>Сфера</th>
-                  <th>Показатель</th>
-                  {tableYears.map((year) => (
-                    <th key={year}>{year}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {tableRows.map((row) => (
-                  <tr
-                    key={`${row.role}:${row.id}`}
-                    className={row.role === 'target' ? 'indicators-target-row' : undefined}
-                  >
-                    <td>
-                      <span className={`indicator-role-pill ${row.role}`}>
-                        {row.role === 'target' ? 'Target' : 'Feature'}
-                      </span>
-                    </td>
-                    <td>{row.sphere}</td>
-                    <td>
-                      <div className="forecast-name">{row.name}</div>
-                      <div className="forecast-unit">{row.unit}</div>
-                    </td>
-                    {tableYears.map((year, index) => (
-                      <IndicatorValueCell
-                        key={year}
-                        value={row.valuesByYear.get(year)}
-                        previousValue={previousYearValue(row, tableYears, index)}
-                      />
+        <>
+          <section className="indicators-quality-grid">
+            <QualityCard
+              label="Полнота таблицы"
+              value={`${completenessStats.completeness.toFixed(0)}%`}
+              caption={`${completenessStats.filledCells}/${completenessStats.totalCells} заполненных ячеек`}
+              accent={completenessStats.missingCells === 0 ? 'positive' : undefined}
+            />
+            <QualityCard
+              label="Последний год"
+              value={completenessStats.lastYear ? String(completenessStats.lastYear) : '-'}
+              caption={`${completenessStats.yearCount} лет в проверочном окне`}
+            />
+            <QualityCard
+              label="Пропуски"
+              value={String(completenessStats.missingCells)}
+              caption="По выбранному target и факторам"
+              accent={completenessStats.missingCells > 0 ? 'negative' : 'positive'}
+            />
+          </section>
+
+          <section className="glass-panel indicators-table-panel">
+            <div className="indicators-history-table-wrapper">
+              <table className="forecast-table indicators-history-table">
+                <thead>
+                  <tr>
+                    <th>Тип</th>
+                    <th>Сфера</th>
+                    <th>Показатель</th>
+                    {tableYears.map((year) => (
+                      <th key={year}>{year}</th>
                     ))}
                   </tr>
-                ))}
-                {tableRows.length === 0 && (
-                  <tr>
-                    <td colSpan={3 + tableYears.length} className="forecast-empty-cell">
-                      Нет значений для выбранного прогнозного показателя
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
+                </thead>
+                <tbody>
+                  {tableRows.map((row) => (
+                    <tr
+                      key={`${row.role}:${row.id}`}
+                      className={row.role === 'target' ? 'indicators-target-row' : undefined}
+                    >
+                      <td>
+                        <span className={`indicator-role-pill ${row.role}`}>
+                          {row.role === 'target' ? 'Target' : 'Feature'}
+                        </span>
+                      </td>
+                      <td>{row.sphere}</td>
+                      <td>
+                        <div className="forecast-name">{row.name}</div>
+                        <div className="forecast-unit">{row.unit}</div>
+                      </td>
+                      {tableYears.map((year, index) => (
+                        <IndicatorValueCell
+                          key={year}
+                          value={row.valuesByYear.get(year)}
+                          previousValue={previousYearValue(row, tableYears, index)}
+                        />
+                      ))}
+                    </tr>
+                  ))}
+                  {tableRows.length === 0 && (
+                    <tr>
+                      <td colSpan={3 + tableYears.length} className="forecast-empty-cell">
+                        Нет значений для выбранного прогнозного показателя
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </>
       )}
 
       {/* Блок просмотра графиков */}
@@ -295,17 +346,34 @@ export function IndicatorsPage() {
             </div>
 
             <div className="dashboard-filter-group" style={{ flex: '1 1 320px', maxWidth: 520 }}>
+              <div className="dashboard-filter-label">Сфера факторов</div>
+              <select
+                className="dashboard-select"
+                value={chartSphere}
+                onChange={(event) => setChartSphere(event.target.value)}
+                disabled={isFiltersLoading || featureSpheres.length === 0}
+              >
+                <option value="all">Все сферы</option>
+                {featureSpheres.map((sphere) => (
+                  <option key={sphere} value={sphere}>
+                    {sphere}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="dashboard-filter-group" style={{ flex: '1 1 320px', maxWidth: 520 }}>
               <div className="dashboard-filter-label">Факторный показатель</div>
               <select
                 className="dashboard-select"
                 value={chartFeatureId}
                 onChange={(event) => setChartFeatureId(event.target.value)}
-                disabled={isFiltersLoading || featureIndicators.length === 0}
+                disabled={isFiltersLoading || filteredFeatureIndicators.length === 0}
               >
                 {isFiltersLoading ? (
                   <option value="">Загрузка...</option>
-                ) : featureIndicators.length > 0 ? (
-                  featureIndicators.map((indicator) => (
+                ) : filteredFeatureIndicators.length > 0 ? (
+                  filteredFeatureIndicators.map((indicator) => (
                     <option key={indicator.id} value={indicator.id}>
                       {indicator.name}
                     </option>
@@ -356,40 +424,86 @@ export function IndicatorsPage() {
                 Загрузка данных…
               </div>
             ) : filteredChartData.length > 0 ? (
-              <div className="indicators-chart-wrapper">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={filteredChartData}>
-                    <CartesianGrid stroke="#e5e7eb" strokeDasharray="3 3" />
-                    <XAxis dataKey="year" />
-                    <YAxis
-                      tickFormatter={(v: number) =>
-                        v >= 1_000_000
-                          ? `${(v / 1_000_000).toFixed(1)} млн`
-                          : v >= 1000
-                            ? `${(v / 1000).toFixed(0)} тыс.`
-                            : String(Math.round(v))
-                      }
-                    />
-                    <Tooltip
-                      formatter={
-                        ((value: number) =>
-                          value.toLocaleString('ru-RU', {
-                            maximumFractionDigits: 1,
-                          })) as never
-                      }
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="value"
-                      name={selectedChartFeature?.name ?? 'Значение'}
-                      stroke="#2563eb"
-                      strokeWidth={2.4}
-                      dot={{ r: 3 }}
-                      activeDot={{ r: 5 }}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
+              <>
+                <div className="indicators-chart-wrapper">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={filteredChartData}>
+                      <CartesianGrid stroke="#e5e7eb" strokeDasharray="3 3" />
+                      <XAxis dataKey="year" />
+                      <YAxis
+                        tickFormatter={(v: number) =>
+                          v >= 1_000_000
+                            ? `${(v / 1_000_000).toFixed(1)} млн`
+                            : v >= 1000
+                              ? `${(v / 1000).toFixed(0)} тыс.`
+                              : String(Math.round(v))
+                        }
+                      />
+                      <Tooltip
+                        formatter={
+                          ((value: number) =>
+                            value.toLocaleString('ru-RU', {
+                              maximumFractionDigits: 1,
+                            })) as never
+                        }
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="value"
+                        name={selectedChartFeature?.name ?? 'Значение'}
+                        stroke="#2563eb"
+                        strokeWidth={2.4}
+                        dot={{ r: 3 }}
+                        activeDot={{ r: 5 }}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+
+                <div className="indicators-yoy-section">
+                  <div className="indicators-yoy-head">
+                    <div>
+                      <div className="indicators-yoy-title">Годовой прирост</div>
+                      <div className="indicators-yoy-caption">
+                        Изменение показателя относительно предыдущего года
+                      </div>
+                    </div>
+                    <div className="indicators-yoy-summary">
+                      {chartStats.avgYoyChange != null
+                        ? `${chartStats.avgYoyChange >= 0 ? '+' : ''}${chartStats.avgYoyChange.toFixed(1)}%`
+                        : '—'}
+                    </div>
+                  </div>
+                  <div className="indicators-yoy-chart-wrapper">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={yoyChartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                        <CartesianGrid vertical={false} stroke="#e5e7eb" strokeDasharray="3 3" />
+                        <XAxis dataKey="year" tick={{ fontSize: 11 }} />
+                        <YAxis
+                          width={42}
+                          tick={{ fontSize: 11 }}
+                          tickFormatter={(value: number) => `${value.toFixed(0)}%`}
+                        />
+                        <Tooltip
+                          formatter={
+                            ((value: number) => `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`) as never
+                          }
+                          labelFormatter={(label) => `${label} г.`}
+                        />
+                        <ReferenceLine y={0} stroke="#94a3b8" strokeDasharray="3 3" />
+                        <Bar dataKey="change" name="YoY" radius={[6, 6, 0, 0]}>
+                          {yoyChartData.map((point) => (
+                            <Cell
+                              key={point.year}
+                              fill={point.change >= 0 ? '#10b981' : '#ef4444'}
+                            />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              </>
             ) : (
               <div
                 style={{
@@ -594,6 +708,20 @@ function formatValue(value: number | undefined): string {
   return value.toLocaleString('ru-RU', { maximumFractionDigits: 1 })
 }
 
+function buildYoyChartData(data: HistoryPoint[]): { year: number; change: number }[] {
+  const changes: { year: number; change: number }[] = []
+  for (let index = 1; index < data.length; index += 1) {
+    const previous = data[index - 1]
+    const current = data[index]
+    if (previous.value === 0) continue
+    changes.push({
+      year: current.year,
+      change: ((current.value - previous.value) / Math.abs(previous.value)) * 100,
+    })
+  }
+  return changes
+}
+
 interface TimeSeriesStats {
   count: number
   mean: number | null
@@ -605,6 +733,42 @@ interface TimeSeriesStats {
   volatility: number | null
   cv: number | null
   totalChange: number | null
+}
+
+interface CompletenessStats {
+  yearCount: number
+  lastYear: number | null
+  totalCells: number
+  filledCells: number
+  missingCells: number
+  completeness: number
+}
+
+function computeCompletenessStats(rows: IndicatorHistoryRow[]): CompletenessStats {
+  const years = new Set<number>()
+  rows.forEach((row) => {
+    row.valuesByYear.forEach((_, year) => years.add(year))
+  })
+  const sortedYears = Array.from(years).sort((a, b) => a - b).slice(-HISTORY_YEAR_COUNT)
+  const totalCells = rows.length * sortedYears.length
+  let filledCells = 0
+
+  rows.forEach((row) => {
+    sortedYears.forEach((year) => {
+      if (row.valuesByYear.get(year) != null) filledCells += 1
+    })
+  })
+
+  const missingCells = Math.max(totalCells - filledCells, 0)
+
+  return {
+    yearCount: sortedYears.length,
+    lastYear: sortedYears[sortedYears.length - 1] ?? null,
+    totalCells,
+    filledCells,
+    missingCells,
+    completeness: totalCells > 0 ? (filledCells / totalCells) * 100 : 0,
+  }
 }
 
 function computeTimeSeriesStats(data: HistoryPoint[]): TimeSeriesStats {
@@ -684,6 +848,26 @@ function computeTimeSeriesStats(data: HistoryPoint[]): TimeSeriesStats {
     cv,
     totalChange,
   }
+}
+
+function QualityCard({
+  label,
+  value,
+  caption,
+  accent,
+}: {
+  label: string
+  value: string
+  caption: string
+  accent?: 'positive' | 'negative'
+}) {
+  return (
+    <div className="indicators-quality-card glass-panel">
+      <div className="dashboard-kpi-label">{label}</div>
+      <div className={`indicators-quality-value${accent ? ` ${accent}` : ''}`}>{value}</div>
+      <div className="dashboard-kpi-caption">{caption}</div>
+    </div>
+  )
 }
 
 function StatItem({

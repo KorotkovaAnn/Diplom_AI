@@ -1,6 +1,9 @@
+import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { observer } from 'mobx-react-lite'
 import { Box, Button } from '@mui/material'
+import CloseIcon from '@mui/icons-material/Close'
+import MenuIcon from '@mui/icons-material/Menu'
 
 const navItems: { to: string; label: string }[] = [
   { to: '/', label: 'Главная' },
@@ -12,15 +15,25 @@ const navItems: { to: string; label: string }[] = [
 
 export const Header = observer(function Header() {
   const navigate = useNavigate()
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false)
+
+  function closeMobileNav() {
+    setIsMobileNavOpen(false)
+  }
+
+  function handleLogoClick() {
+    closeMobileNav()
+    navigate('/')
+  }
 
   return (
-    <Box component="header" className="app-header glass-panel">
+    <Box component="header" className={`app-header glass-panel${isMobileNavOpen ? ' app-header-open' : ''}`}>
       <Box className="app-header-inner">
         <Box className="app-header-left">
           <Button
             type="button"
             className="logo-area"
-            onClick={() => navigate('/')}
+            onClick={handleLogoClick}
             color="inherit"
             disableRipple
             sx={{ p: 0, minWidth: 'auto' }}
@@ -51,7 +64,32 @@ export const Header = observer(function Header() {
           </Box>
         </Box>
 
-        <Box className="app-header-right" />
+        <Box className="app-header-right">
+          <button
+            type="button"
+            className="mobile-nav-toggle"
+            aria-label={isMobileNavOpen ? 'Закрыть меню' : 'Открыть меню'}
+            aria-expanded={isMobileNavOpen}
+            onClick={() => setIsMobileNavOpen((current) => !current)}
+          >
+            {isMobileNavOpen ? <CloseIcon fontSize="small" /> : <MenuIcon fontSize="small" />}
+          </button>
+        </Box>
+      </Box>
+
+      <Box component="nav" className="mobile-nav" aria-hidden={!isMobileNavOpen}>
+        {navItems.map((item) => (
+          <NavLink
+            key={item.to}
+            to={item.to}
+            onClick={closeMobileNav}
+            className={({ isActive }) =>
+              `mobile-nav-link${isActive ? ' mobile-nav-link-active' : ''}`
+            }
+          >
+            {item.label}
+          </NavLink>
+        ))}
       </Box>
     </Box>
   )

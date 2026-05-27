@@ -515,7 +515,6 @@ function TimelineStep({ number, color, title, text }: TimelineStepProps) {
       </div>
       <div className="timeline-title">{title}</div>
       <div className="timeline-text">{text}</div>
-      {number < 5 ? <div className="timeline-connector" /> : null}
     </div>
   )
 }
